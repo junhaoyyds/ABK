@@ -283,9 +283,13 @@ def patch_runtime_old(text, changed_files, path):
         "ksu_handle_sys_read signature",
     )
     text = text.replace(
+        "    unsigned int fd = PT_REGS_PARM1(regs);\n"
         "    char __user **buf_ptr = (char __user **)&PT_REGS_PARM2(regs);\n"
-        "    size_t *count_ptr = (size_t *)&PT_REGS_PARM3(regs);\n\n"
+        "    size_t *count_ptr = (size_t *)&PT_REGS_PARM3(regs);\n"
+        "\n"
         "    ksu_handle_sys_read(fd, buf_ptr, count_ptr);",
+        "    unsigned int fd = PT_REGS_PARM1(regs);\n"
+        "\n"
         "    ksu_handle_sys_read(fd);",
     )
 
