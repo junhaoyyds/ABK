@@ -43,10 +43,21 @@ def find_ksu_dir(root):
     die("SukiSU source directory not found")
 
 
-def patch_sucompat_header(path, changed_files):
-    original = path.read_text()
-    text = original
+def is_new_sucompat_api(ksu_dir):
+    """Detect whether the SukiSU source uses the new (post-refactor) sucompat API."""
+    sucompat_h = ksu_dir / "feature/sucompat.h"
+    if not sucompat_h.exists():
+        return False
+    text = sucompat_h.read_text()
+    return "ksu_handle_stat_sucompat" in text
 
+
+# ---------------------------------------------------------------------------
+# OLD API patches (pre e1fdd39ab512 refactor)
+# ---------------------------------------------------------------------------
+
+def patch_sucompat_header_old(text, changed_files, path):
+    original = text
     text = ensure_include(text, "#include <linux/fs.h>", "#include <linux/types.h>\n")
     text = ensure_include(text, "#include <linux/static_key.h>", "#include <linux/types.h>\n")
     text = ensure_include(text, "#include <linux/version.h>", "#include <linux/types.h>\n")
@@ -66,13 +77,11 @@ int ksu_handle_stat(int *dfd, const char __user **filename_user, int *flags);
             die("missing sucompat stat prototype")
         text = text.replace(old, new, 1)
 
-    write_if_changed(path, text, original, changed_files)
+    return text
 
 
-def patch_sucompat_c(path, changed_files):
-    original = path.read_text()
-    text = original
-
+def patch_sucompat_c_old(text, changed_files, path):
+    original = text
     text = ensure_include(text, "#include <linux/err.h>", "#include <linux/compiler_types.h>\n")
     text = ensure_include(text, "#include <linux/static_key.h>", "#include <linux/compiler_types.h>\n")
     text = text.replace(
@@ -179,13 +188,11 @@ int ksu_handle_stat(int *dfd, struct filename **filename, int *flags)
 #endif"""
         text = text[: match.start(1)] + new_func + text[match.end(1) :]
 
-    write_if_changed(path, text, original, changed_files)
+    return text
 
 
-def patch_syscall_bridge(path, changed_files):
-    original = path.read_text()
-    text = original
-
+def patch_syscall_bridge_old(text, changed_files, path):
+    original = text
     text = text.replace(
         "if (!ksu_su_compat_enabled)",
         "if (!static_branch_likely(&ksu_su_compat_enabled))",
@@ -228,12 +235,436 @@ def patch_syscall_bridge(path, changed_files):
 long __nocfi ksu_hook_faccessat'''
         text = text[: match.start()] + new_func + text[match.end() :]
 
-    write_if_changed(path, text, original, changed_files)
+    return text
 
 
-def patch_symbol_resolver(path, changed_files):
-    original = path.read_text()
-    text = original
+def patch_runtime_old(text, changed_files, path):
+    original = text
+    text = ensure_include(text, "#include <linux/static_key.h>", "#include <linux/printk.h>\n")
+    if "DEFINE_STATIC_KEY_TRUE(ksu_is_init_rc_hook_enabled);" not in text:
+        anchor = '#include "hook/syscall_event_bridge.h"\n'
+        if anchor not in text:
+            die(f"missing runtime static key anchor: {path}")
+        block = (
+            "\n#ifdef CONFIG_KSU_SUSFS\n"
+            "DEFINE_STATIC_KEY_TRUE(ksu_is_init_rc_hook_enabled);\n"
+            "DEFINE_STATIC_KEY_TRUE(ksu_is_input_hook_enabled);\n"
+            "#endif\n"
+        )
+        text = text.replace(anchor, anchor + block, 1)
+
+    old_stop = r'''static void stop_init_rc_hook()
+{
+    ksu_syscall_table_unhook(__NR_read);
+    ksu_syscall_table_unhook(__NR_fstat);
+    pr_info("unregister init_rc syscall hook\n");
+}'''
+    new_stop = r'''static void stop_init_rc_hook()
+{
+#ifdef CONFIG_KSU_SUSFS
+    if (static_key_enabled(&ksu_is_init_rc_hook_enabled)) {
+        static_branch_disable(&ksu_is_init_rc_hook_enabled);
+        pr_info("ksu init rc inline hook disabled\n");
+    }
+#else
+    ksu_syscall_table_unhook(__NR_read);
+    ksu_syscall_table_unhook(__NR_fstat);
+    pr_info("unregister init_rc syscall hook\n");
+#endif
+}'''
+    text = replace_or_confirm(text, old_stop, new_stop,
+                              "ksu init rc inline hook disabled", "stop_init_rc_hook")
+
+    text = replace_or_confirm(
+        text,
+        "static void ksu_handle_sys_read(unsigned int fd, char __user **buf_ptr, size_t *count_ptr)",
+        "void ksu_handle_sys_read(unsigned int fd)",
+        "void ksu_handle_sys_read(unsigned int fd)",
+        "ksu_handle_sys_read signature",
+    )
+    text = text.replace(
+        "    char __user **buf_ptr = (char __user **)&PT_REGS_PARM2(regs);\n"
+        "    size_t *count_ptr = (size_t *)&PT_REGS_PARM3(regs);\n\n"
+        "    ksu_handle_sys_read(fd, buf_ptr, count_ptr);",
+        "    ksu_handle_sys_read(fd);",
+    )
+
+    if "void ksu_handle_vfs_fstat(int fd, loff_t *kstat_size_ptr)" not in text:
+        marker = "\nstatic long (*orig_sys_read)(const struct pt_regs *regs);"
+        if marker not in text:
+            die(f"missing vfs_fstat insertion anchor: {path}")
+        block = r'''
+void ksu_handle_vfs_fstat(int fd, loff_t *kstat_size_ptr)
+{
+    loff_t new_size;
+    struct file *file;
+
+    if (!kstat_size_ptr)
+        return;
+
+    file = fget(fd);
+    if (!file)
+        return;
+
+    if (is_init_rc(file)) {
+        new_size = *kstat_size_ptr + ksu_rc_len;
+        pr_info("stat init.rc");
+        pr_info("adding ksu_rc_len: %lld -> %lld", *kstat_size_ptr, new_size);
+        *kstat_size_ptr = new_size;
+    }
+    fput(file);
+}
+'''
+        text = text.replace(marker, block + marker, 1)
+
+    old_stop_input = r'''void ksu_stop_input_hook_runtime(void)
+{
+    static bool input_hook_stopped = false;
+    if (input_hook_stopped) {
+        return;
+    }
+    input_hook_stopped = true;
+    bool ret = schedule_work(&stop_input_hook_work);
+    pr_info("unregister input kprobe: %d!\n", ret);
+}'''
+    new_stop_input = r'''void ksu_stop_input_hook_runtime(void)
+{
+    static bool input_hook_stopped = false;
+    if (input_hook_stopped) {
+        return;
+    }
+    input_hook_stopped = true;
+#ifdef CONFIG_KSU_SUSFS
+    if (static_key_enabled(&ksu_is_input_hook_enabled)) {
+        static_branch_disable(&ksu_is_input_hook_enabled);
+        pr_info("ksu input inline hook disabled\n");
+    }
+#endif
+    bool ret = schedule_work(&stop_input_hook_work);
+    pr_info("unregister input kprobe: %d!\n", ret);
+}'''
+    text = replace_or_confirm(text, old_stop_input, new_stop_input,
+                              "ksu input inline hook disabled", "ksu_stop_input_hook_runtime")
+
+    old_init = r'''void __init ksu_ksud_init()
+{
+    int ret;
+
+    ksu_syscall_table_hook(__NR_read, ksu_sys_read, &orig_sys_read);
+    ksu_syscall_table_hook(__NR_fstat, ksu_sys_fstat, &orig_sys_fstat);
+
+    ret = register_kprobe(&input_event_kp);
+    pr_info("ksud: input_event_kp: %d\n", ret);
+
+    INIT_WORK(&stop_input_hook_work, do_stop_input_hook);
+}'''
+    new_init = r'''void __init ksu_ksud_init()
+{
+    int ret;
+
+#ifndef CONFIG_KSU_SUSFS
+    ksu_syscall_table_hook(__NR_read, ksu_sys_read, &orig_sys_read);
+    ksu_syscall_table_hook(__NR_fstat, ksu_sys_fstat, &orig_sys_fstat);
+#else
+    pr_info("ksud: using SUSFS inline init.rc hooks\n");
+#endif
+
+    ret = register_kprobe(&input_event_kp);
+    pr_info("ksud: input_event_kp: %d\n", ret);
+
+    INIT_WORK(&stop_input_hook_work, do_stop_input_hook);
+}'''
+    text = replace_or_confirm(text, old_init, new_init,
+                              "using SUSFS inline init.rc hooks", "ksu_ksud_init")
+
+    return text
+
+
+# ---------------------------------------------------------------------------
+# NEW API patches (post e1fdd39ab512 refactor)
+# ---------------------------------------------------------------------------
+
+def patch_sucompat_header_new(text, changed_files, path):
+    """Add includes and convert ksu_su_compat_enabled to static_key_true in the header."""
+    original = text
+    text = ensure_include(text, "#include <linux/fs.h>", "#include <linux/types.h>\n")
+    text = ensure_include(text, "#include <linux/static_key.h>", "#include <linux/types.h>\n")
+    text = ensure_include(text, "#include <linux/version.h>", "#include <linux/types.h>\n")
+    text = text.replace(
+        "extern bool ksu_su_compat_enabled;",
+        "extern struct static_key_true ksu_su_compat_enabled;",
+    )
+    return text
+
+
+def patch_sucompat_c_new(text, changed_files, path):
+    """Convert ksu_su_compat_enabled to static key in the new-API sucompat.c."""
+    original = text
+    text = ensure_include(text, "#include <linux/err.h>", "#include <linux/compiler_types.h>\n")
+    text = ensure_include(text, "#include <linux/static_key.h>", "#include <linux/compiler_types.h>\n")
+    text = text.replace(
+        "bool ksu_su_compat_enabled __read_mostly = true;",
+        "DEFINE_STATIC_KEY_TRUE(ksu_su_compat_enabled);",
+    )
+    text = text.replace(
+        "    *value = ksu_su_compat_enabled ? 1 : 0;",
+        "    *value = static_key_enabled(&ksu_su_compat_enabled) ? 1 : 0;",
+    )
+    text = text.replace(
+        "    ksu_su_compat_enabled = enable;",
+        "    if (enable)\n"
+        "        static_branch_enable(&ksu_su_compat_enabled);\n"
+        "    else\n"
+        "        static_branch_disable(&ksu_su_compat_enabled);",
+    )
+    return text
+
+
+def patch_syscall_bridge_new(text, changed_files, path):
+    """Add SUSFS pre-check to newfstatat and faccessat in the bridge (new API).
+
+    In the new API the bridge already centralises the dispatch:
+        ksu_hook_newfstatat -> ksu_handle_stat_sucompat
+        ksu_hook_faccessat  -> ksu_handle_faccessat_sucompat
+    With SUSFS enabled we short-circuit to the SUSFS handler which hides
+    SUSFS-managed paths / mounts before the sucompat logic runs.
+    """
+    original = text
+
+    # Patch ksu_hook_newfstatat
+    old_newfstatat = (
+        "long __nocfi ksu_hook_newfstatat(int orig_nr, const struct pt_regs *regs)\n"
+        "{\n"
+        "    if (!ksu_su_compat_enabled)\n"
+        "        return ksu_syscall_table[orig_nr](regs);\n"
+        "\n"
+        "    return ksu_handle_stat_sucompat(orig_nr, (struct pt_regs *)regs);\n"
+        "}"
+    )
+    new_newfstatat = (
+        "long __nocfi ksu_hook_newfstatat(int orig_nr, const struct pt_regs *regs)\n"
+        "{\n"
+        "#ifdef CONFIG_KSU_SUSFS\n"
+        "    if (susfs_susfs_is_susfs_ready())\n"
+        "        return ksu_syscall_table[orig_nr](regs);\n"
+        "#endif\n"
+        "    if (!static_branch_likely(&ksu_su_compat_enabled))\n"
+        "        return ksu_syscall_table[orig_nr](regs);\n"
+        "\n"
+        "    return ksu_handle_stat_sucompat(orig_nr, (struct pt_regs *)regs);\n"
+        "}"
+    )
+    text = replace_or_confirm(text, old_newfstatat, new_newfstatat,
+                              "CONFIG_KSU_SUSFS", "newfstatat SUSFS bridge")
+
+    # Patch ksu_hook_faccessat
+    old_faccessat = (
+        "long __nocfi ksu_hook_faccessat(int orig_nr, const struct pt_regs *regs)\n"
+        "{\n"
+        "    if (!ksu_su_compat_enabled)\n"
+        "        return ksu_syscall_table[orig_nr](regs);\n"
+        "\n"
+        "    return ksu_handle_faccessat_sucompat(orig_nr, (struct pt_regs *)regs);\n"
+        "}"
+    )
+    new_faccessat = (
+        "long __nocfi ksu_hook_faccessat(int orig_nr, const struct pt_regs *regs)\n"
+        "{\n"
+        "#ifdef CONFIG_KSU_SUSFS\n"
+        "    if (susfs_susfs_is_susfs_ready())\n"
+        "        return ksu_syscall_table[orig_nr](regs);\n"
+        "#endif\n"
+        "    if (!static_branch_likely(&ksu_su_compat_enabled))\n"
+        "        return ksu_syscall_table[orig_nr](regs);\n"
+        "\n"
+        "    return ksu_handle_faccessat_sucompat(orig_nr, (struct pt_regs *)regs);\n"
+        "}"
+    )
+    text = replace_or_confirm(text, old_faccessat, new_faccessat,
+                              "CONFIG_KSU_SUSFS", "faccessat SUSFS bridge")
+
+    return text
+
+
+def patch_runtime_new(text, changed_files, path):
+    """Patch ksud_integration.c for the new-API codebase.
+
+    The new code has:
+      - ksu_handle_sys_read(unsigned int fd, char __user **buf_ptr, size_t *count_ptr)
+      - ksu_sys_fstat() directly handles stat init.rc size
+      - stop_init_rc_hook() / ksu_stop_input_hook_runtime() / ksu_ksud_init() same signatures
+    """
+    original = text
+
+    # --- static keys ---
+    text = ensure_include(text, "#include <linux/static_key.h>", "#include <linux/printk.h>\n")
+    if "DEFINE_STATIC_KEY_TRUE(ksu_is_init_rc_hook_enabled);" not in text:
+        anchor = '#include "hook/syscall_event_bridge.h"\n'
+        if anchor not in text:
+            die(f"missing runtime static key anchor: {path}")
+        block = (
+            "\n#ifdef CONFIG_KSU_SUSFS\n"
+            "DEFINE_STATIC_KEY_TRUE(ksu_is_init_rc_hook_enabled);\n"
+            "DEFINE_STATIC_KEY_TRUE(ksu_is_input_hook_enabled);\n"
+            "#endif\n"
+        )
+        text = text.replace(anchor, anchor + block, 1)
+
+    # --- ksu_handle_sys_read: simplify signature ---
+    old_read_sig = (
+        "static void ksu_handle_sys_read(unsigned int fd, char __user **buf_ptr, size_t *count_ptr)\n"
+        "{\n"
+        "    struct file *file = fget(fd);\n"
+        "    if (!file) {\n"
+        "        return;\n"
+        "    }\n"
+        "    ksu_install_rc_hook(file);\n"
+        "    fput(file);\n"
+        "}"
+    )
+    new_read_sig = (
+        "void ksu_handle_sys_read(unsigned int fd)\n"
+        "{\n"
+        "    struct file *file = fget(fd);\n"
+        "    if (!file) {\n"
+        "        return;\n"
+        "    }\n"
+        "    ksu_install_rc_hook(file);\n"
+        "    fput(file);\n"
+        "}"
+    )
+    text = replace_or_confirm(text, old_read_sig, new_read_sig,
+                              "void ksu_handle_sys_read(unsigned int fd)",
+                              "ksu_handle_sys_read signature")
+    # Update the call site in ksu_sys_read
+    text = text.replace(
+        "    ksu_handle_sys_read(fd, buf_ptr, count_ptr);",
+        "    ksu_handle_sys_read(fd);",
+    )
+
+    # --- Add ksu_handle_vfs_fstat for SUSFS stat size hiding ---
+    if "void ksu_handle_vfs_fstat(int fd, loff_t *kstat_size_ptr)" not in text:
+        marker = "\nstatic long (*orig_sys_read)(const struct pt_regs *regs);"
+        if marker not in text:
+            die(f"missing vfs_fstat insertion anchor: {path}")
+        block = r'''
+void ksu_handle_vfs_fstat(int fd, loff_t *kstat_size_ptr)
+{
+    loff_t new_size;
+    struct file *file;
+
+    if (!kstat_size_ptr)
+        return;
+
+    file = fget(fd);
+    if (!file)
+        return;
+
+    if (is_init_rc(file)) {
+        new_size = *kstat_size_ptr + ksu_rc_len;
+        pr_info("stat init.rc");
+        pr_info("adding ksu_rc_len: %lld -> %lld", *kstat_size_ptr, new_size);
+        *kstat_size_ptr = new_size;
+    }
+    fput(file);
+}
+'''
+        text = text.replace(marker, block + marker, 1)
+
+    # --- stop_init_rc_hook ---
+    old_stop = r'''static void stop_init_rc_hook()
+{
+    ksu_syscall_table_unhook(__NR_read);
+    ksu_syscall_table_unhook(__NR_fstat);
+    pr_info("unregister init_rc syscall hook\n");
+}'''
+    new_stop = r'''static void stop_init_rc_hook()
+{
+#ifdef CONFIG_KSU_SUSFS
+    if (static_key_enabled(&ksu_is_init_rc_hook_enabled)) {
+        static_branch_disable(&ksu_is_init_rc_hook_enabled);
+        pr_info("ksu init rc inline hook disabled\n");
+    }
+#else
+    ksu_syscall_table_unhook(__NR_read);
+    ksu_syscall_table_unhook(__NR_fstat);
+    pr_info("unregister init_rc syscall hook\n");
+#endif
+}'''
+    text = replace_or_confirm(text, old_stop, new_stop,
+                              "ksu init rc inline hook disabled", "stop_init_rc_hook")
+
+    # --- ksu_stop_input_hook_runtime ---
+    old_stop_input = r'''void ksu_stop_input_hook_runtime(void)
+{
+    static bool input_hook_stopped = false;
+    if (input_hook_stopped) {
+        return;
+    }
+    input_hook_stopped = true;
+    bool ret = schedule_work(&stop_input_hook_work);
+    pr_info("unregister input kprobe: %d!\n", ret);
+}'''
+    new_stop_input = r'''void ksu_stop_input_hook_runtime(void)
+{
+    static bool input_hook_stopped = false;
+    if (input_hook_stopped) {
+        return;
+    }
+    input_hook_stopped = true;
+#ifdef CONFIG_KSU_SUSFS
+    if (static_key_enabled(&ksu_is_input_hook_enabled)) {
+        static_branch_disable(&ksu_is_input_hook_enabled);
+        pr_info("ksu input inline hook disabled\n");
+    }
+#endif
+    bool ret = schedule_work(&stop_input_hook_work);
+    pr_info("unregister input kprobe: %d!\n", ret);
+}'''
+    text = replace_or_confirm(text, old_stop_input, new_stop_input,
+                              "ksu input inline hook disabled", "ksu_stop_input_hook_runtime")
+
+    # --- ksu_ksud_init ---
+    old_init = r'''void __init ksu_ksud_init()
+{
+    int ret;
+
+    ksu_syscall_table_hook(__NR_read, ksu_sys_read, &orig_sys_read);
+    ksu_syscall_table_hook(__NR_fstat, ksu_sys_fstat, &orig_sys_fstat);
+
+    ret = register_kprobe(&input_event_kp);
+    pr_info("ksud: input_event_kp: %d\n", ret);
+
+    INIT_WORK(&stop_input_hook_work, do_stop_input_hook);
+}'''
+    new_init = r'''void __init ksu_ksud_init()
+{
+    int ret;
+
+#ifndef CONFIG_KSU_SUSFS
+    ksu_syscall_table_hook(__NR_read, ksu_sys_read, &orig_sys_read);
+    ksu_syscall_table_hook(__NR_fstat, ksu_sys_fstat, &orig_sys_fstat);
+#else
+    pr_info("ksud: using SUSFS inline init.rc hooks\n");
+#endif
+
+    ret = register_kprobe(&input_event_kp);
+    pr_info("ksud: input_event_kp: %d\n", ret);
+
+    INIT_WORK(&stop_input_hook_work, do_stop_input_hook);
+}'''
+    text = replace_or_confirm(text, old_init, new_init,
+                              "using SUSFS inline init.rc hooks", "ksu_ksud_init")
+
+    return text
+
+
+# ---------------------------------------------------------------------------
+# Shared patches (same for old & new API)
+# ---------------------------------------------------------------------------
+
+def patch_symbol_resolver(text, changed_files, path):
+    original = text
 
     old = r'''void *ksu_resolve_symbol_for_functable_hook(const char *symbol_name)
 {
@@ -353,19 +784,16 @@ def patch_symbol_resolver(path, changed_files):
 
 /* ABK: fallback selinux_setprocattr to security_setprocattr for SukiSU selinux_hide. */'''
     text = replace_or_confirm(
-        text,
-        old,
-        new,
+        text, old, new,
         "ABK: fallback selinux_setprocattr to security_setprocattr for SukiSU selinux_hide.",
         "symbol_resolver selinux_setprocattr fallback",
     )
 
-    write_if_changed(path, text, original, changed_files)
+    return text
 
 
-def patch_lsm_hook(path, changed_files):
-    original = path.read_text()
-    text = original
+def patch_lsm_hook(text, changed_files, path):
+    original = text
 
     old_marker = "ABK: prefer selinux slot for setprocattr hook patching."
     marker = "ABK: prefer resolved setprocattr target for hook patching."
@@ -450,171 +878,11 @@ def patch_lsm_hook(path, changed_files):
             "",
         )
 
-    write_if_changed(path, text, original, changed_files)
+    return text
 
 
-def patch_runtime(path, changed_files):
-    original = path.read_text()
-    text = original
-
-    text = ensure_include(text, "#include <linux/static_key.h>", "#include <linux/printk.h>\n")
-    if "DEFINE_STATIC_KEY_TRUE(ksu_is_init_rc_hook_enabled);" not in text:
-        anchor = '#include "hook/syscall_event_bridge.h"\n'
-        if anchor not in text:
-            die(f"missing runtime static key anchor: {path}")
-        block = (
-            "\n#ifdef CONFIG_KSU_SUSFS\n"
-            "DEFINE_STATIC_KEY_TRUE(ksu_is_init_rc_hook_enabled);\n"
-            "DEFINE_STATIC_KEY_TRUE(ksu_is_input_hook_enabled);\n"
-            "#endif\n"
-        )
-        text = text.replace(anchor, anchor + block, 1)
-
-    old_stop = r'''static void stop_init_rc_hook()
-{
-    ksu_syscall_table_unhook(__NR_read);
-    ksu_syscall_table_unhook(__NR_fstat);
-    pr_info("unregister init_rc syscall hook\n");
-}'''
-    new_stop = r'''static void stop_init_rc_hook()
-{
-#ifdef CONFIG_KSU_SUSFS
-    if (static_key_enabled(&ksu_is_init_rc_hook_enabled)) {
-        static_branch_disable(&ksu_is_init_rc_hook_enabled);
-        pr_info("ksu init rc inline hook disabled\n");
-    }
-#else
-    ksu_syscall_table_unhook(__NR_read);
-    ksu_syscall_table_unhook(__NR_fstat);
-    pr_info("unregister init_rc syscall hook\n");
-#endif
-}'''
-    text = replace_or_confirm(
-        text,
-        old_stop,
-        new_stop,
-        "ksu init rc inline hook disabled",
-        "stop_init_rc_hook",
-    )
-
-    text = replace_or_confirm(
-        text,
-        "static void ksu_handle_sys_read(unsigned int fd, char __user **buf_ptr, size_t *count_ptr)",
-        "void ksu_handle_sys_read(unsigned int fd)",
-        "void ksu_handle_sys_read(unsigned int fd)",
-        "ksu_handle_sys_read signature",
-    )
-    text = text.replace(
-        "    char __user **buf_ptr = (char __user **)&PT_REGS_PARM2(regs);\n"
-        "    size_t *count_ptr = (size_t *)&PT_REGS_PARM3(regs);\n\n"
-        "    ksu_handle_sys_read(fd, buf_ptr, count_ptr);",
-        "    ksu_handle_sys_read(fd);",
-    )
-
-    if "void ksu_handle_vfs_fstat(int fd, loff_t *kstat_size_ptr)" not in text:
-        marker = "\nstatic long (*orig_sys_read)(const struct pt_regs *regs);"
-        if marker not in text:
-            die(f"missing vfs_fstat insertion anchor: {path}")
-        block = r'''
-void ksu_handle_vfs_fstat(int fd, loff_t *kstat_size_ptr)
-{
-    loff_t new_size;
-    struct file *file;
-
-    if (!kstat_size_ptr)
-        return;
-
-    file = fget(fd);
-    if (!file)
-        return;
-
-    if (is_init_rc(file)) {
-        new_size = *kstat_size_ptr + ksu_rc_len;
-        pr_info("stat init.rc");
-        pr_info("adding ksu_rc_len: %lld -> %lld", *kstat_size_ptr, new_size);
-        *kstat_size_ptr = new_size;
-    }
-    fput(file);
-}
-'''
-        text = text.replace(marker, block + marker, 1)
-
-    old_stop_input = r'''void ksu_stop_input_hook_runtime(void)
-{
-    static bool input_hook_stopped = false;
-    if (input_hook_stopped) {
-        return;
-    }
-    input_hook_stopped = true;
-    bool ret = schedule_work(&stop_input_hook_work);
-    pr_info("unregister input kprobe: %d!\n", ret);
-}'''
-    new_stop_input = r'''void ksu_stop_input_hook_runtime(void)
-{
-    static bool input_hook_stopped = false;
-    if (input_hook_stopped) {
-        return;
-    }
-    input_hook_stopped = true;
-#ifdef CONFIG_KSU_SUSFS
-    if (static_key_enabled(&ksu_is_input_hook_enabled)) {
-        static_branch_disable(&ksu_is_input_hook_enabled);
-        pr_info("ksu input inline hook disabled\n");
-    }
-#endif
-    bool ret = schedule_work(&stop_input_hook_work);
-    pr_info("unregister input kprobe: %d!\n", ret);
-}'''
-    text = replace_or_confirm(
-        text,
-        old_stop_input,
-        new_stop_input,
-        "ksu input inline hook disabled",
-        "ksu_stop_input_hook_runtime",
-    )
-
-    old_init = r'''void __init ksu_ksud_init()
-{
-    int ret;
-
-    ksu_syscall_table_hook(__NR_read, ksu_sys_read, &orig_sys_read);
-    ksu_syscall_table_hook(__NR_fstat, ksu_sys_fstat, &orig_sys_fstat);
-
-    ret = register_kprobe(&input_event_kp);
-    pr_info("ksud: input_event_kp: %d\n", ret);
-
-    INIT_WORK(&stop_input_hook_work, do_stop_input_hook);
-}'''
-    new_init = r'''void __init ksu_ksud_init()
-{
-    int ret;
-
-#ifndef CONFIG_KSU_SUSFS
-    ksu_syscall_table_hook(__NR_read, ksu_sys_read, &orig_sys_read);
-    ksu_syscall_table_hook(__NR_fstat, ksu_sys_fstat, &orig_sys_fstat);
-#else
-    pr_info("ksud: using SUSFS inline init.rc hooks\n");
-#endif
-
-    ret = register_kprobe(&input_event_kp);
-    pr_info("ksud: input_event_kp: %d\n", ret);
-
-    INIT_WORK(&stop_input_hook_work, do_stop_input_hook);
-}'''
-    text = replace_or_confirm(
-        text,
-        old_init,
-        new_init,
-        "using SUSFS inline init.rc hooks",
-        "ksu_ksud_init",
-    )
-
-    write_if_changed(path, text, original, changed_files)
-
-
-def patch_selinux_hide(path, changed_files):
-    original = path.read_text()
-    text = original
+def patch_selinux_hide(text, changed_files, path):
+    original = text
 
     text = text.replace("static struct selinux_state fake_state;", "struct selinux_state fake_state;")
     text = text.replace(
@@ -673,12 +941,11 @@ void initialize_fake_status(void)
         "void security_compute_av_user_with_policy(",
     )
 
-    write_if_changed(path, text, original, changed_files)
+    return text
 
 
-def patch_selinux_c(path, changed_files):
-    original = path.read_text()
-    text = original
+def patch_selinux_c(text, changed_files, path):
+    original = text
 
     if "u32 susfs_ksu_sid __read_mostly" not in text:
         anchor = "u32 ksu_file_sid __read_mostly = 0;\n"
@@ -757,6 +1024,7 @@ bool susfs_is_current_init_domain(void)
 '''
         text = text.replace(anchor, anchor + block, 1)
 
+    # Insert susfs_set_batch_sid() call after cache_sid
     cache_marker = r'''    } else {
         pr_info("Cached ksu_file SID: %u\n", ksu_file_sid);
     }
@@ -769,20 +1037,14 @@ bool susfs_is_current_init_domain(void)
     susfs_set_batch_sid();
 #endif
 }'''
-        text = replace_or_confirm(
-            text,
-            cache_marker,
-            replacement,
-            "susfs_set_batch_sid();",
-            "cache_sid SUSFS call",
-        )
+        text = replace_or_confirm(text, cache_marker, replacement,
+                                  "susfs_set_batch_sid();", "cache_sid SUSFS call")
 
-    write_if_changed(path, text, original, changed_files)
+    return text
 
 
-def patch_selinux_h(path, changed_files):
-    original = path.read_text()
-    text = original
+def patch_selinux_h(text, changed_files, path):
+    original = text
 
     if "susfs_is_current_ksu_domain" not in text:
         anchor = "extern u32 ksu_file_sid;\n"
@@ -806,12 +1068,11 @@ bool susfs_is_current_init_domain(void);
 '''
         text = text.replace(anchor, anchor + block, 1)
 
-    write_if_changed(path, text, original, changed_files)
+    return text
 
 
-def patch_supercall(path, changed_files):
-    original = path.read_text()
-    text = original
+def patch_supercall(text, changed_files, path):
+    original = text
 
     text = ensure_include(text, "#include <linux/cred.h>", "#include <linux/anon_inodes.h>\n")
     if "#include <linux/susfs.h>" not in text:
@@ -907,10 +1168,14 @@ int ksu_handle_sys_reboot(int magic1, int magic2, unsigned int cmd, void __user 
 '''
         text = text.replace(marker, "\n" + block + marker, 1)
 
-    write_if_changed(path, text, original, changed_files)
+    return text
 
 
-def verify(ksu_dir):
+# ---------------------------------------------------------------------------
+# Verification
+# ---------------------------------------------------------------------------
+
+def verify(ksu_dir, new_api):
     required = {
         ksu_dir / "runtime/ksud_integration.c": (
             "DEFINE_STATIC_KEY_TRUE(ksu_is_init_rc_hook_enabled)",
@@ -925,12 +1190,6 @@ def verify(ksu_dir):
         ),
         ksu_dir / "hook/lsm_hook.c": (
             "ABK: prefer resolved setprocattr target for hook patching.",
-        ),
-        ksu_dir / "feature/sucompat.c": (
-            "DEFINE_STATIC_KEY_TRUE(ksu_su_compat_enabled)",
-            "int ksu_handle_execveat_sucompat",
-            "int ksu_handle_execveat",
-            "int ksu_handle_stat(int *dfd, struct filename **filename",
         ),
         ksu_dir / "selinux/selinux.c": (
             "u32 susfs_ksu_sid __read_mostly",
@@ -949,6 +1208,33 @@ def verify(ksu_dir):
         ),
         ksu_dir / "supercall/supercall.c": ("int ksu_handle_sys_reboot",),
     }
+
+    if new_api:
+        required[ksu_dir / "feature/sucompat.h"] = (
+            "struct static_key_true ksu_su_compat_enabled",
+        )
+        required[ksu_dir / "feature/sucompat.c"] = (
+            "DEFINE_STATIC_KEY_TRUE(ksu_su_compat_enabled)",
+        )
+        required[ksu_dir / "hook/syscall_event_bridge.c"] = (
+            "CONFIG_KSU_SUSFS",
+            "static_branch_likely(&ksu_su_compat_enabled)",
+        )
+    else:
+        required[ksu_dir / "feature/sucompat.h"] = (
+            "struct static_key_true ksu_su_compat_enabled",
+            "int ksu_handle_stat(int *dfd, struct filename **filename",
+        )
+        required[ksu_dir / "feature/sucompat.c"] = (
+            "DEFINE_STATIC_KEY_TRUE(ksu_su_compat_enabled)",
+            "int ksu_handle_execveat_sucompat",
+            "int ksu_handle_execveat",
+            "int ksu_handle_stat(int *dfd, struct filename **filename",
+        )
+        required[ksu_dir / "hook/syscall_event_bridge.c"] = (
+            "CONFIG_KSU_SUSFS\n    return ksu_syscall_table[orig_nr](regs)",
+        )
+
     for path, markers in required.items():
         data = path.read_text()
         missing = [marker for marker in markers if marker not in data]
@@ -972,6 +1258,10 @@ def verify(ksu_dir):
         die(f"{ksu_dir / 'feature/selinux_hide.c'} missing exported security_compute_av_user_with_policy()")
 
 
+# ---------------------------------------------------------------------------
+# Main
+# ---------------------------------------------------------------------------
+
 def main():
     if len(sys.argv) != 2:
         die("usage: fix_sukisu_susfs.py <kernel-root>")
@@ -979,18 +1269,87 @@ def main():
     root = Path(sys.argv[1]).resolve()
     ksu_dir = find_ksu_dir(root)
     changed_files = []
+    new_api = is_new_sucompat_api(ksu_dir)
 
-    patch_sucompat_header(ksu_dir / "feature/sucompat.h", changed_files)
-    patch_sucompat_c(ksu_dir / "feature/sucompat.c", changed_files)
-    patch_symbol_resolver(ksu_dir / "infra/symbol_resolver.c", changed_files)
-    patch_lsm_hook(ksu_dir / "hook/lsm_hook.c", changed_files)
-    patch_syscall_bridge(ksu_dir / "hook/syscall_event_bridge.c", changed_files)
-    patch_runtime(ksu_dir / "runtime/ksud_integration.c", changed_files)
-    patch_selinux_hide(ksu_dir / "feature/selinux_hide.c", changed_files)
-    patch_selinux_c(ksu_dir / "selinux/selinux.c", changed_files)
-    patch_selinux_h(ksu_dir / "selinux/selinux.h", changed_files)
-    patch_supercall(ksu_dir / "supercall/supercall.c", changed_files)
-    verify(ksu_dir)
+    if new_api:
+        print("Detected NEW sucompat API (post-refactor)")
+    else:
+        print("Detected OLD sucompat API (pre-refactor)")
+
+    # sucompat.h
+    p = ksu_dir / "feature/sucompat.h"
+    orig = p.read_text()
+    if new_api:
+        text = patch_sucompat_header_new(orig, changed_files, p)
+    else:
+        text = patch_sucompat_header_old(orig, changed_files, p)
+    write_if_changed(p, text, orig, changed_files)
+
+    # sucompat.c
+    p = ksu_dir / "feature/sucompat.c"
+    orig = p.read_text()
+    if new_api:
+        text = patch_sucompat_c_new(orig, changed_files, p)
+    else:
+        text = patch_sucompat_c_old(orig, changed_files, p)
+    write_if_changed(p, text, orig, changed_files)
+
+    # symbol_resolver.c (shared)
+    p = ksu_dir / "infra/symbol_resolver.c"
+    orig = p.read_text()
+    text = patch_symbol_resolver(orig, changed_files, p)
+    write_if_changed(p, text, orig, changed_files)
+
+    # lsm_hook.c (shared)
+    p = ksu_dir / "hook/lsm_hook.c"
+    orig = p.read_text()
+    text = patch_lsm_hook(orig, changed_files, p)
+    write_if_changed(p, text, orig, changed_files)
+
+    # syscall_event_bridge.c
+    p = ksu_dir / "hook/syscall_event_bridge.c"
+    orig = p.read_text()
+    if new_api:
+        text = patch_syscall_bridge_new(orig, changed_files, p)
+    else:
+        text = patch_syscall_bridge_old(orig, changed_files, p)
+    write_if_changed(p, text, orig, changed_files)
+
+    # ksud_integration.c (runtime)
+    p = ksu_dir / "runtime/ksud_integration.c"
+    orig = p.read_text()
+    if new_api:
+        text = patch_runtime_new(orig, changed_files, p)
+    else:
+        text = patch_runtime_old(orig, changed_files, p)
+    write_if_changed(p, text, orig, changed_files)
+
+    # selinux_hide.c (shared)
+    p = ksu_dir / "feature/selinux_hide.c"
+    orig = p.read_text()
+    text = patch_selinux_hide(orig, changed_files, p)
+    write_if_changed(p, text, orig, changed_files)
+
+    # selinux.c (shared)
+    p = ksu_dir / "selinux/selinux.c"
+    orig = p.read_text()
+    text = patch_selinux_c(orig, changed_files, p)
+    write_if_changed(p, text, orig, changed_files)
+
+    # selinux.h (shared)
+    p = ksu_dir / "selinux/selinux.h"
+    orig = p.read_text()
+    text = patch_selinux_h(orig, changed_files, p)
+    write_if_changed(p, text, orig, changed_files)
+
+    # supercall.c (shared)
+    p = ksu_dir / "supercall/supercall.c"
+    orig = p.read_text()
+    text = patch_supercall(orig, changed_files, p)
+    write_if_changed(p, text, orig, changed_files)
+
+    # Verify all patches applied correctly
+    verify(ksu_dir, new_api)
 
     if changed_files:
         print("Patched SukiSU SUSFS compatibility files:")
