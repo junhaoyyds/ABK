@@ -282,15 +282,16 @@ def patch_runtime_old(text, changed_files, path):
         "void ksu_handle_sys_read(unsigned int fd)",
         "ksu_handle_sys_read signature",
     )
+    # Remove unused buf_ptr/count_ptr from ksu_sys_read after the call signature change
+    # Replace the call first, then remove the now-unused variable declarations
+    text = text.replace("ksu_handle_sys_read(fd, buf_ptr, count_ptr);", "ksu_handle_sys_read(fd);")
     text = text.replace(
-        "    unsigned int fd = PT_REGS_PARM1(regs);\n"
-        "    char __user **buf_ptr = (char __user **)&PT_REGS_PARM2(regs);\n"
-        "    size_t *count_ptr = (size_t *)&PT_REGS_PARM3(regs);\n"
-        "\n"
-        "    ksu_handle_sys_read(fd, buf_ptr, count_ptr);",
-        "    unsigned int fd = PT_REGS_PARM1(regs);\n"
-        "\n"
-        "    ksu_handle_sys_read(fd);",
+        "    char __user **buf_ptr = (char __user **)&PT_REGS_PARM2(regs);\n",
+        "",
+    )
+    text = text.replace(
+        "    size_t *count_ptr = (size_t *)&PT_REGS_PARM3(regs);\n",
+        "",
     )
 
     if "void ksu_handle_vfs_fstat(int fd, loff_t *kstat_size_ptr)" not in text:
