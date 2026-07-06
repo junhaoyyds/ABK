@@ -421,67 +421,27 @@ def patch_sucompat_c_new(text, changed_files, path):
 
 
 def patch_syscall_bridge_new(text, changed_files, path):
-    """Add SUSFS pre-check to newfstatat and faccessat in the bridge (new API).
+    """Convert ksu_su_compat_enabled boolean checks to static_key checks in the bridge (new API).
 
-    In the new API the bridge already centralises the dispatch:
+    In the new API the bridge centralises dispatch:
         ksu_hook_newfstatat -> ksu_handle_stat_sucompat
         ksu_hook_faccessat  -> ksu_handle_faccessat_sucompat
-    With SUSFS enabled we short-circuit to the SUSFS handler which hides
-    SUSFS-managed paths / mounts before the sucompat logic runs.
+        ksu_hook_execve     -> ksu_handle_execve_sucompat
+    We just need to convert the boolean ksu_su_compat_enabled to static_key_true usage.
+    SUSFS has its own kernel module hooks and does not need changes here.
     """
     original = text
 
-    # Patch ksu_hook_newfstatat
-    old_newfstatat = (
-        "long __nocfi ksu_hook_newfstatat(int orig_nr, const struct pt_regs *regs)\n"
-        "{\n"
-        "    if (!ksu_su_compat_enabled)\n"
-        "        return ksu_syscall_table[orig_nr](regs);\n"
-        "\n"
-        "    return ksu_handle_stat_sucompat(orig_nr, (struct pt_regs *)regs);\n"
-        "}"
+    # Convert negated check: if (!ksu_su_compat_enabled)
+    text = text.replace(
+        "if (!ksu_su_compat_enabled)",
+        "if (!static_branch_likely(&ksu_su_compat_enabled))",
     )
-    new_newfstatat = (
-        "long __nocfi ksu_hook_newfstatat(int orig_nr, const struct pt_regs *regs)\n"
-        "{\n"
-        "#ifdef CONFIG_KSU_SUSFS\n"
-        "    if (susfs_susfs_is_susfs_ready())\n"
-        "        return ksu_syscall_table[orig_nr](regs);\n"
-        "#endif\n"
-        "    if (!static_branch_likely(&ksu_su_compat_enabled))\n"
-        "        return ksu_syscall_table[orig_nr](regs);\n"
-        "\n"
-        "    return ksu_handle_stat_sucompat(orig_nr, (struct pt_regs *)regs);\n"
-        "}"
+    # Convert positive check in else-if: } else if (ksu_su_compat_enabled) {
+    text = text.replace(
+        "} else if (ksu_su_compat_enabled) {",
+        "} else if (static_branch_likely(&ksu_su_compat_enabled)) {",
     )
-    text = replace_or_confirm(text, old_newfstatat, new_newfstatat,
-                              "CONFIG_KSU_SUSFS", "newfstatat SUSFS bridge")
-
-    # Patch ksu_hook_faccessat
-    old_faccessat = (
-        "long __nocfi ksu_hook_faccessat(int orig_nr, const struct pt_regs *regs)\n"
-        "{\n"
-        "    if (!ksu_su_compat_enabled)\n"
-        "        return ksu_syscall_table[orig_nr](regs);\n"
-        "\n"
-        "    return ksu_handle_faccessat_sucompat(orig_nr, (struct pt_regs *)regs);\n"
-        "}"
-    )
-    new_faccessat = (
-        "long __nocfi ksu_hook_faccessat(int orig_nr, const struct pt_regs *regs)\n"
-        "{\n"
-        "#ifdef CONFIG_KSU_SUSFS\n"
-        "    if (susfs_susfs_is_susfs_ready())\n"
-        "        return ksu_syscall_table[orig_nr](regs);\n"
-        "#endif\n"
-        "    if (!static_branch_likely(&ksu_su_compat_enabled))\n"
-        "        return ksu_syscall_table[orig_nr](regs);\n"
-        "\n"
-        "    return ksu_handle_faccessat_sucompat(orig_nr, (struct pt_regs *)regs);\n"
-        "}"
-    )
-    text = replace_or_confirm(text, old_faccessat, new_faccessat,
-                              "CONFIG_KSU_SUSFS", "faccessat SUSFS bridge")
 
     return text
 
@@ -1217,7 +1177,6 @@ def verify(ksu_dir, new_api):
             "DEFINE_STATIC_KEY_TRUE(ksu_su_compat_enabled)",
         )
         required[ksu_dir / "hook/syscall_event_bridge.c"] = (
-            "CONFIG_KSU_SUSFS",
             "static_branch_likely(&ksu_su_compat_enabled)",
         )
     else:
