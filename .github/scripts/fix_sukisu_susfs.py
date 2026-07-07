@@ -405,7 +405,8 @@ def patch_sucompat_header_new(text, changed_files, path):
 
 
 def patch_sucompat_c_new(text, changed_files, path):
-    """Convert ksu_su_compat_enabled to static key in the new-API sucompat.c."""
+    """Convert ksu_su_compat_enabled to static key in the new-API sucompat.c,
+    and add compat stubs for old API names expected by SUSFS kernel VFS patches."""
     original = text
     text = ensure_include(text, "#include <linux/err.h>", "#include <linux/compiler_types.h>\n")
     text = ensure_include(text, "#include <linux/static_key.h>", "#include <linux/compiler_types.h>\n")
@@ -424,6 +425,102 @@ def patch_sucompat_c_new(text, changed_files, path):
         "    else\n"
         "        static_branch_disable(&ksu_su_compat_enabled);",
     )
+
+    # --- ABK compat stubs for old API names used by SUSFS kernel VFS patches ---
+    compat_marker = "/* ABK: compat stubs for SUSFS VFS hooks */"
+    if compat_marker not in text:
+        compat_block = r'''
+/* ABK: compat stubs for SUSFS VFS hooks */
+static char __user *sh_compat_user_path(void)
+{
+    static const char sh_path[] = "/system/bin/sh";
+    return userspace_stack_buffer(sh_path, sizeof(sh_path));
+}
+
+int ksu_handle_faccessat(int *dfd, const char __user **filename_user, int *mode, int *__unused_flags)
+{
+    const char su[] = SU_PATH;
+    char path[sizeof(su) + 1];
+
+    if (!ksu_is_allow_uid_for_current(current_uid().val))
+        return 0;
+
+    memset(path, 0, sizeof(path));
+    strncpy_from_user_nofault(path, *filename_user, sizeof(path));
+
+    if (unlikely(!memcmp(path, su, sizeof(su)))) {
+        pr_info("faccessat su->sh!\n");
+        *filename_user = sh_compat_user_path();
+    }
+
+    return 0;
+}
+
+int ksu_handle_stat(int *dfd, const char __user **filename_user, int *flags)
+{
+    const char su[] = SU_PATH;
+    char path[sizeof(su) + 1];
+
+    if (!ksu_is_allow_uid_for_current(current_uid().val))
+        return 0;
+
+    if (unlikely(!filename_user))
+        return 0;
+
+    memset(path, 0, sizeof(path));
+    strncpy_from_user_nofault(path, *filename_user, sizeof(path));
+
+    if (unlikely(!memcmp(path, su, sizeof(su)))) {
+        pr_info("newfstatat su->sh!\n");
+        *filename_user = sh_compat_user_path();
+    }
+
+    return 0;
+}
+
+long ksu_handle_execveat_sucompat(int *fd, struct filename **filename_ptr,
+                                  void *argv, void *envp, int *flags)
+{
+    struct filename *filename;
+
+    (void)fd;
+    (void)argv;
+    (void)envp;
+    (void)flags;
+
+    if (unlikely(!filename_ptr || !*filename_ptr || IS_ERR(*filename_ptr)))
+        return 0;
+
+    filename = *filename_ptr;
+    if (unlikely(!filename->name))
+        return 0;
+
+    if (!ksu_is_allow_uid_for_current(current_uid().val))
+        return 0;
+
+    if (likely(memcmp(filename->name, SU_PATH, sizeof(SU_PATH))))
+        return 0;
+
+    pr_info("ksu_handle_execveat_sucompat: su found\n");
+    memcpy((void *)filename->name, KSUD_PATH, sizeof(KSUD_PATH));
+
+    escape_with_root_profile();
+    return 0;
+}
+
+int ksu_handle_execveat(int *fd, struct filename **filename_ptr, void *argv,
+                        void *envp, int *flags)
+{
+    return ksu_handle_execveat_sucompat(fd, filename_ptr, argv, envp, flags);
+}
+'''
+        # Append before ksu_sucompat_init or at end of file
+        init_marker = "void __init ksu_sucompat_init()"
+        if init_marker in text:
+            text = text.replace(init_marker, compat_block + "\n" + init_marker, 1)
+        else:
+            text = text + compat_block
+
     return text
 
 
@@ -1191,6 +1288,11 @@ def verify(ksu_dir, new_api):
         )
         required[ksu_dir / "feature/sucompat.c"] = (
             "DEFINE_STATIC_KEY_TRUE(ksu_su_compat_enabled)",
+            "ABK: compat stubs for SUSFS VFS hooks",
+            "int ksu_handle_stat(int *dfd, const char __user **filename_user, int *flags)",
+            "int ksu_handle_faccessat(int *dfd, const char __user **filename_user, int *mode",
+            "ksu_handle_execveat_sucompat",
+            "int ksu_handle_execveat(int *fd, struct filename **filename_ptr",
         )
         required[ksu_dir / "hook/syscall_event_bridge.c"] = (
             "static_branch_likely(&ksu_su_compat_enabled)",
