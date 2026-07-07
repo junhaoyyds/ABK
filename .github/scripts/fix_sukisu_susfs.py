@@ -282,10 +282,18 @@ def patch_runtime_old(text, changed_files, path):
         "void ksu_handle_sys_read(unsigned int fd)",
         "ksu_handle_sys_read signature",
     )
-    # Fix unused variable warnings for buf_ptr/count_ptr after simplifying the call
+    # Remove the call args and the now-unused variable declarations
     text = text.replace(
         "ksu_handle_sys_read(fd, buf_ptr, count_ptr);",
-        "ksu_handle_sys_read(fd);\n    (void)buf_ptr;\n    (void)count_ptr;",
+        "ksu_handle_sys_read(fd);",
+    )
+    text = text.replace(
+        "    char __user **buf_ptr = (char __user **)&PT_REGS_PARM2(regs);\n",
+        "",
+    )
+    text = text.replace(
+        "    size_t *count_ptr = (size_t *)&PT_REGS_PARM3(regs);\n",
+        "",
     )
 
     if "void ksu_handle_vfs_fstat(int fd, loff_t *kstat_size_ptr)" not in text:
@@ -499,6 +507,15 @@ def patch_runtime_new(text, changed_files, path):
     text = text.replace(
         "    ksu_handle_sys_read(fd, buf_ptr, count_ptr);",
         "    ksu_handle_sys_read(fd);",
+    )
+    # Remove the now-unused buf_ptr and count_ptr declarations in ksu_sys_read
+    text = text.replace(
+        "    char __user **buf_ptr = (char __user **)&PT_REGS_PARM2(regs);\n",
+        "",
+    )
+    text = text.replace(
+        "    size_t *count_ptr = (size_t *)&PT_REGS_PARM3(regs);\n",
+        "",
     )
 
     # --- Add ksu_handle_vfs_fstat for SUSFS stat size hiding ---
