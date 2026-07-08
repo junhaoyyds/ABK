@@ -1,4 +1,5 @@
 name: Android 内核构建-自定义
+run-name: "${{ inputs.version }} | ${{ inputs.kernel_version }}.${{ inputs.sub_level }} | ${{ inputs.kernelsu_variant }}"
 
 permissions:
   contents: write
