@@ -97,6 +97,12 @@ class ContractClient:
         path.write_bytes(b"artifact")
         return str(path)
 
+    def get_published_signing_key(self):
+        return None
+
+    def repository_secret_exists(self, name):
+        return False
+
 
 class JsonContractTests(unittest.TestCase):
     def setUp(self):
@@ -130,7 +136,43 @@ class JsonContractTests(unittest.TestCase):
         output = stdout.getvalue()
         payload = json.loads(output)
         self.assertEqual(1, len(output.splitlines()), output)
+        self.assertEqual(abk.CLI_VERSION, payload["cliVersion"])
         return exit_code, payload, stderr.getvalue()
+
+    def test_human_version_flag_reports_the_cli_version(self):
+        for argv in (
+            ["abk", "--version"],
+            ["abk", "--version", "--", "--json"],
+        ):
+            with self.subTest(argv=argv):
+                stdout = io.StringIO()
+                stderr = io.StringIO()
+                with (
+                    mock.patch.object(sys, "argv", argv),
+                    contextlib.redirect_stdout(stdout),
+                    contextlib.redirect_stderr(stderr),
+                    self.assertRaises(SystemExit) as raised,
+                ):
+                    abk.main()
+
+                self.assertEqual(0, raised.exception.code)
+                self.assertEqual(f"abk {abk.CLI_VERSION}\n", stdout.getvalue())
+                self.assertEqual("", stderr.getvalue())
+
+    def test_json_version_flag_reports_one_machine_document(self):
+        for argv in (
+            ["abk", "--json", "--version"],
+            ["abk", "--version", "--json"],
+        ):
+            with self.subTest(argv=argv):
+                exit_code, payload, stderr = self._run_main(argv)
+
+                self.assertEqual(0, exit_code)
+                self.assertTrue(payload["ok"])
+                self.assertEqual("version", payload["command"])
+                self.assertIsNone(payload["error"])
+                self.assertIsNone(payload["errorCode"])
+                self.assertEqual("", stderr)
 
     def test_json_stdio_is_forced_to_utf8(self):
         stdout = mock.Mock()
@@ -343,6 +385,98 @@ class JsonContractTests(unittest.TestCase):
         self.assertIn("ABK_REPO", payload["error"])
         make_client.assert_not_called()
         self.assertEqual("", stderr)
+
+    def test_sync_success_reports_signing_lock_as_warning(self):
+        class BehindForkClient(ContractClient):
+            authentication_error = None
+
+            def __init__(self):
+                super().__init__()
+                self.syncs = 0
+
+            def check_behind(self, *args, **kwargs):
+                return {"behind_by": 2, "ahead_by": 0, "status": "behind"}
+
+            def sync_fork(self):
+                self.syncs += 1
+
+        client = BehindForkClient()
+        with (
+            mock.patch.object(abk, "make_client", return_value=client),
+            mock.patch.object(
+                abk,
+                "ensure_signing_key",
+                side_effect=abk.SigningStateIndeterminateError("repair signing state"),
+            ),
+        ):
+            exit_code, payload, stderr = self._run_main([
+                "abk", "--json", "--token", "test-token", "sync",
+            ])
+
+        self.assertEqual(0, exit_code)
+        self.assertTrue(payload["ok"])
+        self.assertTrue(payload["changed"])
+        self.assertEqual(2, payload["behindByBefore"])
+        self.assertTrue(payload["signingStateIndeterminate"])
+        self.assertEqual(
+            "signing_state_indeterminate",
+            payload["warnings"][0]["code"],
+        )
+        self.assertEqual(1, client.syncs)
+        self.assertEqual("", stderr)
+
+    def test_fork_success_reports_signing_lock_as_warning(self):
+        client = ContractClient()
+        client.authentication_error = None
+        client.repo = "org/custom-abk"
+        with (
+            mock.patch.object(abk, "make_client", return_value=client),
+            mock.patch.object(
+                abk,
+                "ensure_signing_key",
+                side_effect=abk.SigningStateIndeterminateError("repair signing state"),
+            ),
+        ):
+            exit_code, payload, stderr = self._run_main([
+                "abk", "--json", "--token", "test-token", "--repo",
+                "org/custom-abk", "fork",
+            ])
+
+        self.assertEqual(0, exit_code)
+        self.assertTrue(payload["ok"])
+        self.assertEqual("org/custom-abk", payload["repo"])
+        self.assertFalse(payload["created"])
+        self.assertTrue(payload["signingStateIndeterminate"])
+        self.assertEqual(
+            "signing_state_indeterminate",
+            payload["warnings"][0]["code"],
+        )
+        self.assertEqual("", stderr)
+
+    def test_login_success_is_not_reversed_by_signing_lock(self):
+        client = ContractClient()
+        client.authentication_error = None
+        client.check_and_prompt_sync = mock.Mock(return_value={"needs_fork": False})
+        stdout = io.StringIO()
+        stderr = io.StringIO()
+        with (
+            mock.patch.object(sys, "argv", ["abk", "login"]),
+            mock.patch.object(abk, "device_flow_login", return_value="test-token"),
+            mock.patch.object(abk, "make_client", return_value=client),
+            mock.patch.object(
+                abk,
+                "ensure_signing_key",
+                side_effect=abk.SigningStateIndeterminateError("repair signing state"),
+            ),
+            contextlib.redirect_stdout(stdout),
+            contextlib.redirect_stderr(stderr),
+        ):
+            exit_code = abk.main()
+
+        self.assertEqual(0, exit_code)
+        self.assertEqual("test-token", abk.load_config()["token"])
+        self.assertIn("repair signing state", stderr.getvalue())
+        self.assertNotIn("Login/fork check failed", stderr.getvalue())
 
     def test_json_without_a_command_is_a_single_parser_error_document(self):
         exit_code, payload, stderr = self._run_main(["abk", "--json"])
@@ -915,6 +1049,28 @@ class JsonContractTests(unittest.TestCase):
         self.assertEqual("artifact_verification_failed", payload["errorCode"])
         self.assertIsNone(payload["downloads"][0]["path"])
         self.assertFalse((output_dir / "artifact-77.zip").exists())
+
+    def test_disabled_verification_keeps_download_and_skips_verifier(self):
+        client = ContractClient()
+        output_dir = Path(self.temp_dir.name) / "verification-disabled"
+        abk._save_signing_disabled_state({}, "alice/ABK")
+        argv = [
+            "abk", "--json", "artifacts", "--run-id", "101", "--download",
+            "--artifact-id", "77", "--output", str(output_dir),
+        ]
+        with (
+            mock.patch.object(abk, "get_token", return_value="test-token"),
+            mock.patch.object(abk, "GitHubClient", return_value=client),
+            mock.patch.object(abk, "verify_artifact_archive") as verify,
+        ):
+            exit_code, payload, _ = self._run_main(argv)
+
+        self.assertEqual(0, exit_code)
+        self.assertFalse(payload["verificationEnabled"])
+        self.assertEqual("disabled", payload["downloads"][0]["verification"]["status"])
+        self.assertTrue(Path(payload["downloads"][0]["path"]).is_file())
+        self.assertIsNone(payload["downloads"][0]["error"])
+        verify.assert_not_called()
 
 
 class GitHubClientContractTests(unittest.TestCase):

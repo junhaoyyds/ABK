@@ -1,6 +1,7 @@
 package com.abk.kernel.utils
 
 import android.content.Context
+import android.util.Log
 import com.abk.kernel.BuildConfig
 import com.abk.kernel.R
 import com.abk.kernel.data.model.APP_UPDATE_LINE_DEV
@@ -28,6 +29,7 @@ import java.io.File
 import java.io.FileOutputStream
 import java.io.InputStream
 import java.util.Locale
+import java.security.MessageDigest
 import java.util.zip.ZipEntry
 import java.util.zip.ZipFile
 import java.util.zip.ZipInputStream
@@ -69,9 +71,55 @@ object DownloadUtils {
         val errorMessage: String? = null
     )
 
+    suspend fun downloadRuntimeModuleAsset(
+        context: Context,
+        token: String?,
+        url: String,
+        name: String,
+        sizeBytes: Long = 0L,
+        runId: Long = -2000000001L,
+        runTitle: String,
+        downloadDirectoryPath: String? = null,
+        preserveDownloadedZip: Boolean = true,
+    ): DownloadResult {
+        return downloadDirectAsset(
+            context = context,
+            token = token,
+            url = url,
+            name = name,
+            sizeBytes = sizeBytes,
+            runId = runId,
+            runTitle = runTitle,
+            sourceAssetId = 0L,
+            downloadDirectoryPath = downloadDirectoryPath,
+            storageSubdirectory = "ABK",
+            preserveDownloadedZip = preserveDownloadedZip,
+            bundleWithNotices = false
+        )
+    }
+
+    fun fileSha256Hex(file: File): String {
+        val digest = MessageDigest.getInstance("SHA-256")
+        file.inputStream().use { input ->
+            val buffer = ByteArray(8192)
+            var read: Int
+            while (input.read(buffer).also { read = it } > 0) {
+                digest.update(buffer, 0, read)
+            }
+        }
+        return digest.digest().joinToString("") { "%02x".format(it) }
+    }
+
     private data class NoticeFiles(
         val license: File,
         val thirdPartyNotices: File
+    )
+
+    private data class DirectAssetStorage(
+        val assetDir: File,
+        val preserveDownloadedZip: Boolean = false,
+        val bundleWithNotices: Boolean = false,
+        val downloadedFileIsRoot: Boolean = false,
     )
 
     private data class LocalDownloadEntry(
@@ -215,6 +263,7 @@ object DownloadUtils {
         downloadUrl: String? = null,
         downloadDirectoryPath: String? = null,
         bundleWithNotices: Boolean = false,
+        resolveSigningPublicKeyPem: (suspend () -> String?)? = null,
         onProgress: (Int) -> Unit = {}
     ): DownloadResult = withContext(Dispatchers.IO) {
         var runDir: File? = null
@@ -305,12 +354,25 @@ object DownloadUtils {
                     }
                 val bundledDependencies = resolveBundledMagiskModules(stagingRoot, token)
                 val bundledCompanionApps = resolveBundledCompanionApps(stagingRoot, token)
-                val signingPublicKey = PreferencesRepository(context).readForkArtifactSigningPublicKeyBlocking()
-                val signingPublicKeyPem = signingPublicKey
-                    ?.takeIf { it.isNotBlank() }
-                    ?.let(ForkSigningManager::publicKeyPemFromStoredValue)
                 val signingVerificationEnabled = PreferencesRepository(context)
                     .readArtifactSigningVerificationEnabledBlocking()
+                val requiresTrustedKey = candidates.any { candidate ->
+                    ArtifactVerification.readBundleManifest(candidate) != null &&
+                        ArtifactVerification.requiresTrustedBundle(
+                            classifyDownloadedFile(candidate)
+                        )
+                }
+                val signingPublicKeyPem = if (
+                    signingVerificationEnabled &&
+                    requiresTrustedKey &&
+                    resolveSigningPublicKeyPem != null
+                ) {
+                    resolveSigningPublicKeyPem()
+                } else {
+                    PreferencesRepository(context).readForkArtifactSigningPublicKeyBlocking()
+                        ?.takeIf { it.isNotBlank() }
+                        ?.let(ForkSigningManager::publicKeyPemFromStoredValue)
+                }
 
                 createBundledDownloadEntries(
                     context = context,
@@ -408,18 +470,47 @@ object DownloadUtils {
         runTitle: String,
         sourceAssetId: Long = 0L,
         downloadDirectoryPath: String? = null,
+        storageSubdirectory: String? = "prebuilt-gki",
+        preserveDownloadedZip: Boolean = false,
         bundleWithNotices: Boolean = false,
         onProgress: (Int) -> Unit = {}
+    ): DownloadResult = downloadDirectAsset(
+        context = context,
+        token = token,
+        url = url,
+        name = name,
+        sizeBytes = sizeBytes,
+        runId = runId,
+        runTitle = runTitle,
+        sourceAssetId = sourceAssetId,
+        storage = resolveDirectAssetStorage(
+            downloadDirectoryPath = downloadDirectoryPath,
+            storageSubdirectory = storageSubdirectory,
+            preserveDownloadedZip = preserveDownloadedZip,
+            bundleWithNotices = bundleWithNotices,
+        ) ?: return DownloadResult(
+            errorMessage = downloadDirectoryErrorMessage(context, downloadDirectoryPath)
+        ),
+        onProgress = onProgress,
+    )
+
+    private suspend fun downloadDirectAsset(
+        context: Context,
+        token: String?,
+        url: String,
+        name: String,
+        sizeBytes: Long,
+        runId: Long,
+        runTitle: String,
+        sourceAssetId: Long = 0L,
+        storage: DirectAssetStorage,
+        onProgress: (Int) -> Unit = {}
     ): DownloadResult = withContext(Dispatchers.IO) {
-        var assetDir: File? = null
+        var assetDir: File? = storage.assetDir
         var file: File? = null
         var outDir: File? = null
         var stageDir: File? = null
         try {
-            val downloadsRoot = resolveDownloadsRoot(downloadDirectoryPath)
-                ?: return@withContext DownloadResult(
-                    errorMessage = downloadDirectoryErrorMessage(context, downloadDirectoryPath)
-                )
             val request = Request.Builder()
                 .url(url)
                 .header("Accept", "application/octet-stream")
@@ -453,14 +544,15 @@ object DownloadUtils {
                         else -> 1L
                     }
 
-                    val targetAssetDir = File(downloadsRoot, "prebuilt-gki/${safeFileName(name)}").apply {
-                        if (bundleWithNotices && exists()) {
+                    val targetAssetDir = requireNotNull(assetDir)
+                    targetAssetDir.apply {
+                        if (storage.bundleWithNotices && exists()) {
                             deleteRecursively()
                         }
                         mkdirs()
                     }
                     assetDir = targetAssetDir
-                    if (bundleWithNotices) {
+                    if (storage.bundleWithNotices) {
                         stageDir = createStageDir(context, "prebuilt-${safeFileName(name)}")
                         file = File(requireNotNull(stageDir), safeFileName(name))
                     } else {
@@ -476,7 +568,7 @@ object DownloadUtils {
             }
 
             val downloadedFile = requireNotNull(file)
-            val records = if (bundleWithNotices) {
+            val records = if (storage.bundleWithNotices) {
                 val signingPublicKeyPem = PreferencesRepository(context)
                     .readForkArtifactSigningPublicKeyBlocking()
                     ?.takeIf { it.isNotBlank() }
@@ -508,7 +600,7 @@ object DownloadUtils {
                     if (candidateFiles.isEmpty()) {
                         stageDir?.deleteRecursively()
                         stageDir = null
-                        assetDir?.deleteRecursively()
+                        if (!storage.downloadedFileIsRoot) assetDir?.deleteRecursively()
                         return@withContext DownloadResult(
                             errorMessage = "No downloadable payload was found in $name"
                         )
@@ -517,7 +609,7 @@ object DownloadUtils {
                         ?: run {
                             stageDir?.deleteRecursively()
                             stageDir = null
-                            assetDir?.deleteRecursively()
+                            if (!storage.downloadedFileIsRoot) assetDir?.deleteRecursively()
                             return@withContext DownloadResult(
                                 errorMessage = "Failed to fetch $LICENSE_FILE_NAME or $THIRD_PARTY_NOTICES_FILE_NAME"
                             )
@@ -539,7 +631,7 @@ object DownloadUtils {
                 }
             } else {
                 val byName = classifyDownloadedFile(downloadedFile)
-                val files = if (downloadedFile.extension.equals("zip", ignoreCase = true) && byName in setOf(ArtifactType.KERNEL_PACKAGE, ArtifactType.OTHER)) {
+                val files = if (!storage.preserveDownloadedZip && downloadedFile.extension.equals("zip", ignoreCase = true) && byName in setOf(ArtifactType.KERNEL_PACKAGE, ArtifactType.OTHER)) {
                     val extractedDir = File(requireNotNull(assetDir), "extracted")
                     outDir = extractedDir
                     extractedDir.mkdirs()
@@ -611,14 +703,14 @@ object DownloadUtils {
             file?.delete()
             stageDir?.deleteRecursively()
             outDir?.deleteRecursively()
-            assetDir?.deleteRecursively()
+            if (!storage.downloadedFileIsRoot) assetDir?.deleteRecursively()
             throw e
         } catch (e: Exception) {
             coroutineContext.ensureActive()
             file?.delete()
             stageDir?.deleteRecursively()
             outDir?.deleteRecursively()
-            assetDir?.takeIf { bundleWithNotices }?.deleteRecursively()
+            if (!storage.downloadedFileIsRoot) assetDir?.takeIf { storage.bundleWithNotices }?.deleteRecursively()
             DownloadResult(errorMessage = downloadExceptionMessage(context, e))
         }
     }
@@ -867,6 +959,40 @@ object DownloadUtils {
             return null
         }
         return directory.takeIf { it.isDirectory && it.canWrite() }
+    }
+
+    /**
+     * Resolve storage directory for direct asset downloads.
+     *
+     * If [storageSubdirectory] is null or blank, the downloads root is returned (i.e. files will be
+     * placed directly into the Downloads root). In that case the returned DirectAssetStorage
+     * will have downloadedFileIsRoot = true and DownloadUtils will avoid deleting that root.
+     *
+     * Use a non-empty storageSubdirectory to isolate asset files under a subdirectory.
+     */
+    private fun resolveDirectAssetStorage(
+        downloadDirectoryPath: String? = null,
+        storageSubdirectory: String? = "prebuilt-gki",
+        preserveDownloadedZip: Boolean = false,
+        bundleWithNotices: Boolean = false,
+    ): DirectAssetStorage? {
+        val downloadsRoot = resolveDownloadsRoot(downloadDirectoryPath) ?: return null
+        val assetDir = storageSubdirectory
+            ?.trim()
+            ?.takeIf { it.isNotEmpty() }
+            ?.let { subdirectory -> File(downloadsRoot, subdirectory).apply { mkdirs() } }
+            ?: downloadsRoot
+        val usableAssetDir = assetDir.takeIf { it.exists() || it.mkdirs() }?.takeIf { it.isDirectory && it.canWrite() }
+            ?: return null
+        if (storageSubdirectory.isNullOrBlank()) {
+            Log.w("DownloadUtils", "Saving direct asset into Downloads root; deletion of this directory will be suppressed.")
+        }
+        return DirectAssetStorage(
+            assetDir = usableAssetDir,
+            preserveDownloadedZip = preserveDownloadedZip,
+            bundleWithNotices = bundleWithNotices,
+            downloadedFileIsRoot = usableAssetDir == downloadsRoot
+        )
     }
 
     private fun downloadHttpErrorMessage(context: Context, code: Int): String =

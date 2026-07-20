@@ -1383,6 +1383,59 @@ class MainViewModel @JvmOverloads constructor(
         }
     }
 
+    private suspend fun refreshForkArtifactSigningPublicKeyForDownload(
+        owner: String,
+        fork: GitHubRepo,
+    ): Result<String> = forkSigningInitMutex.withLock {
+        val secretName = FORK_ARTIFACT_SIGNING_SECRET_NAME
+        val releaseTag = FORK_ARTIFACT_SIGNING_RELEASE_TAG
+        val release = when (val result = github.getReleaseByTag(owner, fork.name, releaseTag)) {
+            is Result.Success -> result.data
+                ?: return@withLock Result.Error("Fork signing release is missing")
+            is Result.Error -> return@withLock Result.Error(
+                "Fork signing release query failed: ${result.message}"
+            )
+            Result.Loading -> return@withLock Result.Loading
+        }
+        suspend fun readRemotePublicKey(): String? =
+            when (val result = github.downloadReleaseAssetText(
+                owner,
+                fork.name,
+                release.id,
+                FORK_ARTIFACT_SIGNING_PUBLIC_KEY_ASSET_NAME,
+            )) {
+                is Result.Success -> ForkSigningManager.publicKeyBase64FromStoredValue(
+                    result.data
+                )
+                else -> null
+            }
+        val firstPublicKeyBase64 = readRemotePublicKey()
+            ?: return@withLock Result.Error(
+                "Fork signing public key is unavailable or invalid"
+            )
+        val secretExists = when (val result = github.listRepositorySecrets(owner, fork.name)) {
+            is Result.Success -> result.data.any { it.name == secretName }
+            is Result.Error -> return@withLock Result.Error(
+                "Fork signing secret query failed: ${result.message}"
+            )
+            Result.Loading -> return@withLock Result.Loading
+        }
+        if (!secretExists) {
+            return@withLock Result.Error("Fork signing Secret is missing")
+        }
+        val secondPublicKeyBase64 = readRemotePublicKey()
+            ?: return@withLock Result.Error(
+                "Fork signing public key is unavailable or invalid"
+            )
+        if (firstPublicKeyBase64 != secondPublicKeyBase64) {
+            return@withLock Result.Error(
+                "Fork signing public key changed during refresh"
+            )
+        }
+        prefs.saveForkArtifactSigningState(firstPublicKeyBase64, secretName, releaseTag)
+        Result.Success(ForkSigningManager.publicKeyPemFromBase64(firstPublicKeyBase64))
+    }
+
     private suspend fun ensureForkArtifactSigningReady(owner: String, fork: GitHubRepo) {
         forkSigningInitMutex.withLock {
             if (!prefs.artifactSigningVerificationEnabled.first()) return
@@ -1437,26 +1490,35 @@ class MainViewModel @JvmOverloads constructor(
                 Result.Loading -> return
             }
             val existingPublicKeyAsset = releaseAssets.firstOrNull { it.name == FORK_ARTIFACT_SIGNING_PUBLIC_KEY_ASSET_NAME }
-            val existingPublicKey = prefs.forkArtifactSigningPublicKey.first()
-            if (secretExists && !existingPublicKey.isNullOrBlank()) {
-                prefs.saveForkArtifactSigningState(existingPublicKey, secretName, releaseTag)
-                return
-            }
             if (secretExists && existingPublicKeyAsset != null) {
-                val pem = when (val downloaded = github.downloadReleaseAssetText(owner, fork.name, release.id, FORK_ARTIFACT_SIGNING_PUBLIC_KEY_ASSET_NAME)) {
-                    is Result.Success -> downloaded.data
-                    else -> null
-                }
-                if (!pem.isNullOrBlank()) {
-                    val base64 = pem.lineSequence()
-                        .filterNot { it.startsWith("-----") }
-                        .joinToString("")
-                        .trim()
-                    if (base64.isNotBlank()) {
+                when (val downloaded = github.downloadReleaseAssetText(owner, fork.name, release.id, FORK_ARTIFACT_SIGNING_PUBLIC_KEY_ASSET_NAME)) {
+                    is Result.Success -> {
+                        val base64 = ForkSigningManager.publicKeyBase64FromStoredValue(
+                            downloaded.data
+                        )
+                        if (base64 == null) {
+                            showSnackbar("Fork signing public key is invalid", longDuration = true)
+                            return
+                        }
                         prefs.saveForkArtifactSigningState(base64, secretName, releaseTag)
                         return
                     }
+                    is Result.Error -> {
+                        showSnackbar(
+                            "Fork signing public key refresh failed: ${downloaded.message}",
+                            longDuration = true
+                        )
+                        return
+                    }
+                    Result.Loading -> return
                 }
+            }
+            if (secretExists || existingPublicKeyAsset != null) {
+                showSnackbar(
+                    "Fork signing material is incomplete; retry after key management finishes",
+                    longDuration = true
+                )
+                return
             }
 
             when (val regenerated = regenerateForkArtifactSigningMaterial(owner, fork, secretName, releaseTag)) {
@@ -2795,7 +2857,21 @@ class MainViewModel @JvmOverloads constructor(
                 artifact.toWorkflowRun(),
                 downloadUrl,
                 downloadDirectory,
-                bundleWithNotices = true
+                bundleWithNotices = true,
+                resolveSigningPublicKeyPem = {
+                    val state = _uiState.value
+                    val fork = state.forkRepo
+                        ?: error("Fork signing context is unavailable")
+                    val owner = fork.owner?.login
+                        ?: state.user?.login
+                        ?: fork.fullName.substringBefore('/').takeIf { it.isNotBlank() }
+                        ?: error("Fork signing context is unavailable")
+                    when (val refreshed = refreshForkArtifactSigningPublicKeyForDownload(owner, fork)) {
+                        is Result.Success -> refreshed.data
+                        is Result.Error -> error(refreshed.message)
+                        Result.Loading -> error("Fork signing public key refresh did not complete")
+                    }
+                }
             ) { pct ->
                 val displayProgress = if (mirrorEnabled) {
                     (50 + pct / 2).coerceIn(50, 100)

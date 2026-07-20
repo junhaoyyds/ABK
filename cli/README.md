@@ -74,6 +74,16 @@ abk logout
 
 ## 使用方法 / Usage
 
+### CLI 版本 / CLI Version
+
+```bash
+abk --version
+abk --json --version
+```
+
+全局 `abk --version` 显示 CLI 版本；现有的 `abk build --version VALUE`
+仍用于设置自定义内核版本，两者语义不变。
+
 ### 账户管理 / Account Management
 
 ```bash
@@ -180,13 +190,73 @@ abk artifacts --run-id 12345 -o ./out    # 指定目录
 abk artifacts --set-download-dir ./out   # 持久化默认目录
 ```
 
+### 签名密钥管理 / Signing Key Management
+
+`abk signing` 管理目标 fork 的产物签名密钥和 CLI 验证策略。未显式指定
+`--repo owner/name` 时使用当前用户的 ABK fork：
+
+```bash
+abk signing status
+abk signing import --public-key-file public.pem --private-key-file private.pem
+abk signing rotate
+abk signing enable
+abk signing disable
+abk --repo owner/name signing status
+```
+
+`import` 要求一对相互匹配的 RSA 密钥（至少 2048 位）：
+
+- 公钥必须是 SPKI PEM，即以 `-----BEGIN PUBLIC KEY-----` 开头。
+- 私钥必须是未加密的 PKCS#8 PEM，即以 `-----BEGIN PRIVATE KEY-----` 开头。
+- CLI 只读取用户提供的私钥文件，不会把私钥写入本地配置；`rotate` 生成的私钥
+  也只保留在操作期间。私钥只会上传到仓库的 Actions Secret
+  `ABK_ARTIFACT_SIGNING_KEY_BASE64`。
+- 公钥会发布为 `abk-artifact-key` Release 中的
+  `abk-artifact-signing-public.pem` 资产，并按仓库缓存到本地配置。
+
+`rotate` 生成并安装一对新密钥。`import` 更换现有密钥和 `rotate` 都会替换
+远程 Secret 与公钥资产；旧产物包仍保留原签名，但无法再使用仓库当前发布的
+公钥验证。`disable` 会先删除 Actions Secret 并确认删除成功，再删除公钥资产，
+最后记录仓库级的本地禁用状态。远程签名材料保持不存在时，CLI 触发的后续
+构建不再签名，下载产物时也会明确跳过验证；如果其他客户端重新创建了任一
+远程签名项目，已禁用的 CLI 会将其视为状态冲突并拒绝构建或下载，而不会静默
+执行未签名构建或跳过验证。`enable` 会重新启用验证，并在远程密钥不存在时
+生成一对新密钥。
+
+GitHub 的 Secret 与 Release asset API 不提供跨资源原子事务。CLI 会检测并发
+修改并在无法确认状态时 fail closed，但密钥导入、轮换或禁用期间仍应保证只有
+一个客户端在管理同一 fork 的签名材料。如果导入或轮换因并发修改或失败响应
+而无法确定最终远程状态，CLI 会为该仓库持久化一个“状态不确定”安全锁。在成功执行
+`signing import`、`signing rotate` 或 `signing disable` 完成修复前，该锁会
+阻止后续 CLI 构建和产物下载。
+
+修改操作可先用 `--dry-run` 检查，不会更改 GitHub 或本地状态。更换已有密钥
+和禁用签名需要交互确认；自动化环境请显式传入 `--yes`（`--json` 模式不会
+读取确认输入）：
+
+```bash
+abk signing rotate --dry-run
+abk signing rotate --yes
+abk signing disable --dry-run
+abk signing disable --yes
+```
+
+CLI 与 Android App 使用相同的远程 Secret 和公钥资产，但启用/禁用偏好及
+公钥缓存分别保存在各自客户端。Android App 在检查 fork 签名状态时会优先读取
+远程公钥资产并刷新本地缓存，因此可以继续验证 CLI `import` 或 `rotate` 后的
+新产物；仍不应在两端同时更换同一 fork 的密钥。通过 CLI 禁用后也应在 App 中
+同步禁用，否则仍处于启用状态的 App 可能重新创建远程签名材料，并导致 CLI
+报告状态冲突。
+
 ### 机器可读 JSON / Machine-readable JSON
 
 自动化调用可使用全局前置参数 `--json`。命令执行时 stdout 始终只有一个
-`schemaVersion: 1` JSON 文档；该模式不会读取 stdin 或打开浏览器。
+包含 `schemaVersion: 1` 和 `cliVersion` 的 JSON 文档；该模式不会读取 stdin
+或打开浏览器。
 `--help` 仍是供人阅读的文本，不属于 JSON 合同：
 
 ```bash
+abk --json --version
 abk --json whoami
 abk --json status --limit 20
 abk --json build --matrix a14 --ksu ReSukiSU --force

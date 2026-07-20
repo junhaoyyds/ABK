@@ -70,13 +70,22 @@ object ForkSigningManager {
     fun publicKeyPemFromBase64(base64: String): String =
         pem("PUBLIC KEY", Base64.getDecoder().decode(base64))
 
-    fun publicKeyPemFromStoredValue(value: String?): String? {
+    fun publicKeyBase64FromStoredValue(value: String?): String? {
         val normalized = normalizeStoredPublicKeyValue(value) ?: return null
-        return if (normalized.contains("-----BEGIN")) {
-            normalized
-        } else {
-            runCatching { publicKeyPemFromBase64(normalized) }.getOrNull()
-        }
+        return runCatching {
+            val bytes = if (normalized.contains("-----BEGIN")) {
+                decodePemBlock(normalized, ForkSigningImportError.EMPTY_PUBLIC_KEY)
+            } else {
+                Base64.getMimeDecoder().decode(normalized)
+            }
+            val publicKey = decodePublicKey(bytes)
+            Base64.getEncoder().encodeToString(publicKey.encoded)
+        }.getOrNull()
+    }
+
+    fun publicKeyPemFromStoredValue(value: String?): String? {
+        val base64 = publicKeyBase64FromStoredValue(value) ?: return null
+        return publicKeyPemFromBase64(base64)
     }
 
     private fun normalizeStoredPublicKeyValue(value: String?): String? {

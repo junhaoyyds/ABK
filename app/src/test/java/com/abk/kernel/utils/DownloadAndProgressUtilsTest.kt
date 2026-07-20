@@ -152,6 +152,10 @@ class DownloadAndProgressUtilsTest {
         assertEquals(material.publicKeyPem, ForkSigningManager.publicKeyPemFromStoredValue(material.publicKeyBase64))
         assertEquals(material.publicKeyPem, ForkSigningManager.publicKeyPemFromStoredValue(material.publicKeyPem))
         assertEquals(material.publicKeyPem, ForkSigningManager.publicKeyPemFromStoredValue(jsonValue))
+        assertEquals(
+            material.publicKeyBase64,
+            ForkSigningManager.publicKeyBase64FromStoredValue(material.publicKeyPem)
+        )
     }
 
     @Test
@@ -160,6 +164,20 @@ class DownloadAndProgressUtilsTest {
         assertNull(ForkSigningManager.publicKeyPemFromStoredValue("""{"unexpected":true}"""))
         assertNull(ForkSigningManager.publicKeyPemFromStoredValue(""))
         assertNull(ForkSigningManager.publicKeyPemFromStoredValue(null))
+        assertNull(
+            ForkSigningManager.publicKeyPemFromStoredValue(
+                java.util.Base64.getEncoder().encodeToString("not a public key".toByteArray())
+            )
+        )
+        val ecPublicKey = java.security.KeyPairGenerator.getInstance("EC")
+            .generateKeyPair()
+            .public
+            .encoded
+        assertNull(
+            ForkSigningManager.publicKeyPemFromStoredValue(
+                java.util.Base64.getEncoder().encodeToString(ecPublicKey)
+            )
+        )
     }
 
     @Test
