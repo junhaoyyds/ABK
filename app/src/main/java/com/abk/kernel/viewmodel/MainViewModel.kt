@@ -105,6 +105,13 @@ data class CustomKernelOptionsImportResult(
     val duplicateCount: Int
 )
 
+data class CustomKernelOptionSummary(
+    val total: Int,
+    val enabled: Int,
+    val disabled: Int,
+    val ignored: Int
+)
+
 data class MainUiState(
     val authStep: AuthStep = AuthStep.INTRO,
     val rootGranted: Boolean = false,
@@ -4486,13 +4493,9 @@ class MainViewModel @JvmOverloads constructor(
             if (editingIndex != null && editingIndex in indices) {
                 removeAt(editingIndex)
             }
-            val duplicateIndex = indexOfFirst { it.symbol.equals(symbol, ignoreCase = true) }
-            if (duplicateIndex >= 0) {
-                removeAt(duplicateIndex)
-            }
-            add(normalizedOption)
         }
-        updateBuildConfig(currentConfig.copy(customKernelOptions = updated))
+        val merged = mergeCustomKernelOptions(updated, listOf(normalizedOption))
+        updateBuildConfig(currentConfig.copy(customKernelOptions = merged))
     }
 
     fun removeCustomKernelOption(index: Int) {
@@ -4502,10 +4505,24 @@ class MainViewModel @JvmOverloads constructor(
         updateBuildConfig(currentConfig.copy(customKernelOptions = updated))
     }
 
+    fun removeCustomKernelOptions(indices: Collection<Int>) {
+        val currentConfig = KernelSupport.normalize(_uiState.value.buildConfig)
+        if (currentConfig.buildTarget == BUILD_TARGET_ONEPLUS) return
+        val updated = removeCustomKernelOptionsAtIndices(currentConfig.customKernelOptions, indices)
+        if (updated == currentConfig.customKernelOptions) return
+        updateBuildConfig(currentConfig.copy(customKernelOptions = updated))
+    }
+
+    fun clearCustomKernelOptions() {
+        val currentConfig = KernelSupport.normalize(_uiState.value.buildConfig)
+        if (currentConfig.buildTarget == BUILD_TARGET_ONEPLUS || currentConfig.customKernelOptions.isEmpty()) return
+        updateBuildConfig(currentConfig.copy(customKernelOptions = emptyList()))
+    }
+
     fun importCustomKernelOptions(text: String): CustomKernelOptionsImportResult {
         val currentConfig = KernelSupport.normalize(_uiState.value.buildConfig)
         val imported = parseCustomKernelOptionsText(text)
-        val merged = currentConfig.customKernelOptions + imported.options
+        val merged = mergeCustomKernelOptions(currentConfig.customKernelOptions, imported.options)
         updateBuildConfig(currentConfig.copy(customKernelOptions = merged))
         return imported
     }
@@ -5762,6 +5779,47 @@ internal fun parseCustomKernelOptionsText(text: String): CustomKernelOptionsImpo
         skippedCount = skippedCount,
         duplicateCount = duplicateCount
     )
+}
+
+internal fun summarizeCustomKernelOptions(options: List<CustomKernelOption>): CustomKernelOptionSummary {
+    var enabled = 0
+    var disabled = 0
+    var ignored = 0
+    options.forEach { option ->
+        when (CustomKernelOptionMode.normalize(option.mode)) {
+            CustomKernelOptionMode.ENABLED_Y,
+            CustomKernelOptionMode.ENABLED_M,
+            CustomKernelOptionMode.RAW -> enabled += 1
+            CustomKernelOptionMode.DISABLED -> disabled += 1
+            else -> ignored += 1
+        }
+    }
+    return CustomKernelOptionSummary(
+        total = options.size,
+        enabled = enabled,
+        disabled = disabled,
+        ignored = ignored
+    )
+}
+
+internal fun mergeCustomKernelOptions(
+    options: List<CustomKernelOption>,
+    updates: List<CustomKernelOption>
+): List<CustomKernelOption> {
+    if (updates.isEmpty()) return options
+    return KernelSupport.normalizeCustomKernelOptions(options + updates)
+}
+
+internal fun removeCustomKernelOptionsAtIndices(
+    options: List<CustomKernelOption>,
+    indices: Collection<Int>
+): List<CustomKernelOption> {
+    if (options.isEmpty() || indices.isEmpty()) return options
+    val targetIndices = indices.filter { it in options.indices }.toSet()
+    if (targetIndices.isEmpty()) return options
+    return options.filterIndexed { index, _ ->
+        index !in targetIndices
+    }
 }
 
 internal fun CustomKernelOption.toWorkflowLine(): String? {
