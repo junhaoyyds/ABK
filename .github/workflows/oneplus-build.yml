@@ -343,6 +343,7 @@ jobs:
           cp "$WORKSPACE/kernel_patches/zram_patches/002-zstd.patch" "$COMMON_ROOT/"
 
           cd "$KERNEL_ROOT"
+          MANUAL_HOOK_PATCH_NAME=""
           if [ "$EFFECTIVE_USE_LZ4KD" = "true" ]; then
             cp -r "$WORKSPACE"/SukiSU_patch/other/zram/lz4k/include/linux/* "$COMMON_ROOT/include/linux/" || true
             cp -r "$WORKSPACE"/SukiSU_patch/other/zram/lz4k/lib/* "$COMMON_ROOT/lib/" || true
@@ -357,20 +358,31 @@ jobs:
             cp "$WORKSPACE"/susfs4oki/kernel_patches/fs/* "$COMMON_ROOT/fs/" || true
             cp "$WORKSPACE"/susfs4oki/kernel_patches/include/linux/* "$COMMON_ROOT/include/linux/" || true
           elif [ "$KSU_VARIANT" = "SukiSU" ] || [ "$KSU_VARIANT" = "ReSukiSU" ]; then
-            MANUAL_HOOK_PATCH=""
-            case "$KERNEL_VERSION" in
-              5.10|5.15)
-                MANUAL_HOOK_PATCH="$WORKSPACE/kernel_patches/sukisu/scope_min_manual_hooks_v1.6.patch"
+            case "$KSU_VARIANT" in
+              ReSukiSU)
+                MANUAL_HOOK_PATCH_NAME="scope_min_manual_hooks_v1.9.patch"
                 ;;
-              *)
-                if [ -f "$WORKSPACE/kernel_patches/sukisu/scope_min_manual_hooks_v1.9.patch" ]; then
-                  MANUAL_HOOK_PATCH="$WORKSPACE/kernel_patches/sukisu/scope_min_manual_hooks_v1.9.patch"
-                else
-                  MANUAL_HOOK_PATCH="$WORKSPACE/kernel_patches/sukisu/scope_min_manual_hooks_v1.6.patch"
-                fi
+              SukiSU)
+                case "$KERNEL_VERSION" in
+                  5.10|5.15)
+                    MANUAL_HOOK_PATCH_NAME="scope_min_manual_hooks_v1.6.patch"
+                    ;;
+                  *)
+                    if [ -f "$WORKSPACE/kernel_patches/sukisu/scope_min_manual_hooks_v1.9.patch" ]; then
+                      MANUAL_HOOK_PATCH_NAME="scope_min_manual_hooks_v1.9.patch"
+                    else
+                      MANUAL_HOOK_PATCH_NAME="scope_min_manual_hooks_v1.6.patch"
+                    fi
+                    ;;
+                esac
                 ;;
             esac
-            [ -n "$MANUAL_HOOK_PATCH" ] && cp "$MANUAL_HOOK_PATCH" "$COMMON_ROOT/" || true
+            MANUAL_HOOK_PATCH="$WORKSPACE/kernel_patches/sukisu/$MANUAL_HOOK_PATCH_NAME"
+            if [ ! -f "$MANUAL_HOOK_PATCH" ]; then
+              echo "::error::${KSU_VARIANT} ${KERNEL_VERSION} 所需的手动 hook 补丁不存在: $MANUAL_HOOK_PATCH_NAME"
+              exit 1
+            fi
+            cp "$MANUAL_HOOK_PATCH" "$COMMON_ROOT/$MANUAL_HOOK_PATCH_NAME"
           fi
 
           if [ "$USE_UNICODE_BYPASS" = "true" ]; then
@@ -382,9 +394,10 @@ jobs:
           fi
 
           cd "$COMMON_ROOT"
-          for patch_file in scope_min_manual_hooks_v1.9.patch scope_min_manual_hooks_v1.6.patch unicode_bypass_fix.patch; do
-            [ -f "$patch_file" ] && patch -p1 < "$patch_file" || true
-          done
+          if [ -n "$MANUAL_HOOK_PATCH_NAME" ]; then
+            patch -p1 < "$MANUAL_HOOK_PATCH_NAME" || true
+          fi
+          [ -f unicode_bypass_fix.patch ] && patch -p1 < unicode_bypass_fix.patch || true
           if [ "$EFFECTIVE_USE_LZ4KD" = "true" ]; then
             [ -f lz4kd.patch ] && patch -p1 < lz4kd.patch || true
             [ -f lz4k_oplus.patch ] && patch -p1 < lz4k_oplus.patch || true
@@ -559,26 +572,39 @@ jobs:
               raise SystemExit(0)
 
           text = path.read_text()
-          marker = "builtin SUSFS ksu_sulog_capture() expects argv_user as a pointer"
+          marker = "SUSFS uses pointer argv_user; non-SUSFS uses struct user_arg_ptr value"
           new = "\n".join([
-              "    /* ABK: builtin SUSFS ksu_sulog_capture() expects argv_user as a pointer. */",
+              "    /* ABK: SUSFS uses pointer argv_user; non-SUSFS uses struct user_arg_ptr value. */",
               "#ifdef CONFIG_KSU_SUSFS",
               "    pending = ksu_sulog_capture(KSU_SULOG_EVENT_IOCTL_GRANT_ROOT, NULL, NULL, gfp);",
               "#else",
-              "    pending = ksu_sulog_capture(KSU_SULOG_EVENT_IOCTL_GRANT_ROOT, NULL, USER_ARG_NULL, gfp);",
+              "    pending = ksu_sulog_capture(KSU_SULOG_EVENT_IOCTL_GRANT_ROOT, NULL, *USER_ARG_NULL, gfp);",
               "#endif",
           ])
 
           changed = False
           if marker not in text:
-              for old in (
-                  "    pending = ksu_sulog_capture(KSU_SULOG_EVENT_IOCTL_GRANT_ROOT, NULL, USER_ARG_NULL, gfp);",
-                  "    pending = ksu_sulog_capture(KSU_SULOG_EVENT_IOCTL_GRANT_ROOT, NULL, &USER_ARG_NULL, gfp);",
-              ):
-                  if old in text:
-                      text = text.replace(old, new, 1)
-                      changed = True
-                      break
+              legacy = re.compile(
+                  r"    /\* ABK: builtin SUSFS ksu_sulog_capture\(\) expects argv_user as a pointer\. \*/\n"
+                  r"#ifdef CONFIG_KSU_SUSFS\n"
+                  r"    pending = ksu_sulog_capture\(KSU_SULOG_EVENT_IOCTL_GRANT_ROOT, NULL, NULL, gfp\);\n"
+                  r"#else\n"
+                  r"    pending = ksu_sulog_capture\(KSU_SULOG_EVENT_IOCTL_GRANT_ROOT, NULL, &?USER_ARG_NULL, gfp\);\n"
+                  r"#endif"
+              )
+              text, replacements = legacy.subn(new, text, count=1)
+              changed = replacements == 1
+
+              if not changed:
+                  for old in (
+                      "    pending = ksu_sulog_capture(KSU_SULOG_EVENT_IOCTL_GRANT_ROOT, NULL, USER_ARG_NULL, gfp);",
+                      "    pending = ksu_sulog_capture(KSU_SULOG_EVENT_IOCTL_GRANT_ROOT, NULL, &USER_ARG_NULL, gfp);",
+                      "    pending = ksu_sulog_capture(KSU_SULOG_EVENT_IOCTL_GRANT_ROOT, NULL, *USER_ARG_NULL, gfp);",
+                  ):
+                      if old in text:
+                          text = text.replace(old, new, 1)
+                          changed = True
+                          break
 
           if changed:
               path.write_text(text)
@@ -588,11 +614,14 @@ jobs:
 
           final_text = path.read_text()
           incompatible = re.search(
-              r"pending = ksu_sulog_capture\(KSU_SULOG_EVENT_IOCTL_GRANT_ROOT, NULL, &?USER_ARG_NULL, gfp\);",
+              r"pending\s*=\s*ksu_sulog_capture\(\s*KSU_SULOG_EVENT_IOCTL_GRANT_ROOT\s*,\s*"
+              r"NULL\s*,\s*&?USER_ARG_NULL\s*,\s*gfp\s*\);",
               final_text,
           )
-          if incompatible and marker not in final_text:
+          if incompatible:
               raise SystemExit(f"{path} still contains incompatible ksu_sulog_capture grant_root argv call")
+          if marker in final_text and new not in final_text:
+              raise SystemExit(f"{path} contains an incomplete ABK ksu_sulog_capture compatibility block")
           PY
 
       - name: 注入 SukiSU/ReSukiSU KPM Kconfig

@@ -1497,6 +1497,13 @@ jobs:
       - name: 应用 SUSFS 补丁
         if: inputs.enable_susfs && inputs.ksu_variant != 'None'
         working-directory: ${{ env.KERNEL_ROOT }}
+        env:
+          ABK_ANDROID_VERSION: ${{ inputs.android_version }}
+          ABK_KERNEL_VERSION: ${{ inputs.kernel_version }}
+          ABK_KSU_VARIANT: ${{ inputs.ksu_variant }}
+          ABK_SUB_LEVEL: ${{ inputs.sub_level }}
+          ABK_OS_PATCH_LEVEL: ${{ inputs.os_patch_level }}
+          ABK_USE_BBG: ${{ inputs.use_bbg }}
         run: |
           echo "应用 SUSFS 补丁..."
           # 读取 SUSFS 上游版本（例如 v2.1.0），用于匹配修复补丁目录
@@ -1608,11 +1615,11 @@ jobs:
             return 0
           }
 
-          cp $SUSFS4KSU/kernel_patches/50_add_susfs_in_gki-${{ inputs.android_version }}-${{ inputs.kernel_version }}.patch ./common/
+          cp "$SUSFS4KSU/kernel_patches/50_add_susfs_in_gki-${ABK_ANDROID_VERSION}-${ABK_KERNEL_VERSION}.patch" ./common/
           cp $SUSFS4KSU/kernel_patches/fs/* ./common/fs/
           cp $SUSFS4KSU/kernel_patches/include/linux/* ./common/include/linux/
 
-          case "${{ inputs.ksu_variant }}" in
+          case "$ABK_KSU_VARIANT" in
             "Official")
               cd ./KernelSU
               cp $SUSFS4KSU/kernel_patches/KernelSU/10_enable_susfs_for_ksu.patch ./
@@ -1634,9 +1641,9 @@ jobs:
           esac
 
           cd $KERNEL_ROOT/common
-          patch -p1 < 50_add_susfs_in_gki-${{ inputs.android_version }}-${{ inputs.kernel_version }}.patch || true
+          patch -p1 < "50_add_susfs_in_gki-${ABK_ANDROID_VERSION}-${ABK_KERNEL_VERSION}.patch" || true
 
-          if [ "${{ inputs.ksu_variant }}" == "SukiSU" ] || [ "${{ inputs.ksu_variant }}" == "ReSukiSU" ]; then
+          if [ "$ABK_KSU_VARIANT" == "SukiSU" ] || [ "$ABK_KSU_VARIANT" == "ReSukiSU" ]; then
             SUSFS_C="./fs/susfs.c"
             if [ -f "$SUSFS_C" ] && grep -q '^static void susfs_run_sus_path_loop(' "$SUSFS_C"; then
               sed -i 's/^static void susfs_run_sus_path_loop(/void susfs_run_sus_path_loop(/' "$SUSFS_C"
@@ -1644,8 +1651,8 @@ jobs:
             fi
           fi
 
-          if [ "${{ inputs.ksu_variant }}" == "Official" ] || [ "${{ inputs.ksu_variant }}" == "SukiSU" ] || [ "${{ inputs.ksu_variant }}" == "ReSukiSU" ]; then
-            CURRENT_SUB="${{ inputs.sub_level }}"
+          if [ "$ABK_KSU_VARIANT" == "Official" ] || [ "$ABK_KSU_VARIANT" == "SukiSU" ] || [ "$ABK_KSU_VARIANT" == "ReSukiSU" ]; then
+            CURRENT_SUB="$ABK_SUB_LEVEL"
             if [[ ! "$CURRENT_SUB" =~ ^[0-9]+$ ]]; then
               CURRENT_SUB=99999
             fi
@@ -1673,34 +1680,183 @@ jobs:
               fi
             }
 
+            fix_task_mmu_vma_pad_start() {
+              local file="./fs/proc/task_mmu.c"
+              [ -f "$file" ] || return 0
+
+              python3 - <<'PY'
+          from pathlib import Path
+          import re
+
+          path = Path("./fs/proc/task_mmu.c")
+          text = path.read_text()
+
+          if not re.search(r"\bVMA_PAD_START\s*\(", text):
+              raise SystemExit(0)
+          if re.search(r"(?m)^\s*#\s*define\s+VMA_PAD_START(?:\s|\()", text):
+              print("task_mmu.c 已定义 VMA_PAD_START")
+              raise SystemExit(0)
+
+          anchor_matches = list(re.finditer(r'(?m)^#include\s+"internal\.h"\s*$', text))
+          if anchor_matches:
+              insert_at = anchor_matches[-1].end()
+          else:
+              include_matches = list(re.finditer(r"(?m)^#include\s+[<\"].*[>\"]\s*$", text))
+              if not include_matches:
+                  raise SystemExit(f"{path} 使用 VMA_PAD_START，但无法定位头文件区域")
+              insert_at = include_matches[-1].end()
+
+          fallback = """
+
+          #ifndef VMA_PAD_START
+          #define VMA_PAD_START(vma) ((vma)->vm_end)
+          #endif"""
+          path.write_text(text[:insert_at] + fallback + text[insert_at:])
+          print("已为 task_mmu.c 注入 VMA_PAD_START 兼容定义")
+          PY
+            }
+
             fix_proc_base_missing_vma_decl() {
               local file="./fs/proc/base.c"
               [ -f "$file" ] || return 0
               grep -qF 'vma = find_vma(mm, addr);' "$file" || return 0
 
-              local assign_line start_line relative_mm_line mm_line
-              assign_line="$(awk '/vma = find_vma\(mm, addr\);/ { print NR; exit }' "$file")"
-              [ -n "$assign_line" ] || return 0
-              start_line=$(( assign_line > 80 ? assign_line - 80 : 1 ))
+              python3 - <<'PY'
+          from pathlib import Path
+          import re
 
-              if sed -n "${start_line},$((assign_line - 1))p" "$file" | grep -qF 'struct vm_area_struct *vma;'; then
-                return 0
-              fi
+          path = Path("./fs/proc/base.c")
+          lines = path.read_text().splitlines(keepends=True)
 
-              relative_mm_line="$(sed -n "${start_line},$((assign_line - 1))p" "$file" | awk '/struct mm_struct \*mm([[:space:]=;]|$)/ { line = NR } END { if (line) print line }')"
-              [ -n "$relative_mm_line" ] || return 0
-              mm_line=$(( start_line + relative_mm_line - 1 ))
+          assign_re = re.compile(r"^\s*vma\s*=\s*find_vma\s*\(\s*mm\s*,\s*addr\s*\)\s*;")
+          vma_decl_re = re.compile(r"\bstruct\s+vm_area_struct\s*\*\s*vma\s*;")
+          mm_decl_re = re.compile(r"\bstruct\s+mm_struct\s*\*\s*mm(?:\b|[\s=;])")
 
-              awk -v target="$mm_line" '
-                NR == target {
-                  print
-                  match($0, /^[ \t]*/)
-                  print substr($0, RSTART, RLENGTH) "struct vm_area_struct *vma;"
-                  next
-                }
-                { print }
-              ' "$file" > "$file.tmp" && mv "$file.tmp" "$file"
-              echo "已修复 proc/base.c 缺少 vma 声明"
+          def sanitize_line(line, in_block_comment):
+              result = []
+              index = 0
+              in_string = None
+
+              while index < len(line):
+                  if in_block_comment:
+                      end = line.find("*/", index)
+                      if end == -1:
+                          return "".join(result), True
+                      index = end + 2
+                      in_block_comment = False
+                      continue
+
+                  char = line[index]
+                  next_char = line[index + 1] if index + 1 < len(line) else ""
+
+                  if in_string is not None:
+                      if char == "\\" and index + 1 < len(line):
+                          index += 2
+                          continue
+                      if char == in_string:
+                          in_string = None
+                      index += 1
+                      continue
+
+                  if char == "/" and next_char == "*":
+                      in_block_comment = True
+                      index += 2
+                      continue
+                  if char == "/" and next_char == "/":
+                      break
+                  if char in ("'", '"'):
+                      in_string = char
+                      index += 1
+                      continue
+
+                  result.append(char)
+                  index += 1
+
+              return "".join(result), in_block_comment
+
+          def find_function_ranges(source_lines):
+              depth = 0
+              in_block_comment = False
+              function_start = None
+              ranges = []
+
+              for index, line in enumerate(source_lines):
+                  sanitized, in_block_comment = sanitize_line(line, in_block_comment)
+                  opens = sanitized.count("{")
+                  closes = sanitized.count("}")
+                  previous_depth = depth
+                  depth += opens - closes
+
+                  if previous_depth == 0 and depth > 0 and opens:
+                      function_start = index
+                  if function_start is not None and previous_depth > 0 and depth == 0:
+                      ranges.append((function_start, index))
+                      function_start = None
+
+              return ranges
+
+          function_ranges = find_function_ranges(lines)
+          changed = False
+
+          for start, end in reversed(function_ranges):
+              body = lines[start:end + 1]
+              if not any(assign_re.search(line) for line in body):
+                  continue
+              if any(vma_decl_re.search(line) for line in body):
+                  continue
+
+              mm_offsets = [offset for offset, line in enumerate(body) if mm_decl_re.search(line)]
+              if not mm_offsets:
+                  raise SystemExit(f"{path} 命中 vma 赋值但未找到同函数 mm 声明")
+
+              mm_index = start + mm_offsets[-1]
+              indent = re.match(r"^\s*", lines[mm_index]).group(0)
+              lines.insert(mm_index + 1, f"{indent}struct vm_area_struct *vma;\n")
+              changed = True
+
+          if changed:
+              path.write_text("".join(lines))
+              print("已修复 proc/base.c 缺少 vma 声明")
+
+          final_lines = path.read_text().splitlines()
+          final_ranges = find_function_ranges([line + "\n" for line in final_lines])
+          for start, end in final_ranges:
+              body = final_lines[start:end + 1]
+              if any(assign_re.search(line) for line in body) and not any(vma_decl_re.search(line) for line in body):
+                  raise SystemExit(f"{path} 仍存在未声明 vma 的 find_vma 调用")
+          PY
+            }
+
+            fix_namei_set_nameidata_arity() {
+              local file="./fs/namei.c"
+              [ -f "$file" ] || return 0
+
+              python3 - <<'PY'
+          from pathlib import Path
+          import re
+
+          path = Path("./fs/namei.c")
+          text = path.read_text()
+
+          call_re = re.compile(r"set_nameidata\s*\(\s*nd\s*,\s*old_dfd\s*,\s*fake_filename\s*,\s*NULL\s*\)")
+          if not call_re.search(text):
+              raise SystemExit(0)
+
+          definition = re.search(r"static\s+void\s+set_nameidata\s*\((.*?)\)\s*\{", text, re.S)
+          if definition is None:
+              raise SystemExit(f"{path} 存在四参 set_nameidata 调用，但未找到定义")
+
+          params = [part.strip() for part in definition.group(1).split(",") if part.strip()]
+          if len(params) == 3:
+              updated, count = call_re.subn("set_nameidata(nd, old_dfd, fake_filename)", text)
+              if count:
+                  path.write_text(updated)
+                  print("已修复 namei.c 中 set_nameidata 参数个数")
+              if call_re.search(path.read_text()):
+                  raise SystemExit(f"{path} 仍残留四参 set_nameidata 调用")
+          elif len(params) != 4:
+              raise SystemExit(f"{path} 的 set_nameidata 定义参数个数异常: {len(params)}")
+          PY
             }
 
             fix_task_mmu_unused_vma_decl() {
@@ -1788,11 +1944,7 @@ jobs:
               fi
             }
 
-            fix_sukisu_fdinfo_mask_decl() {
-              if [ "${{ inputs.ksu_variant }}" != "SukiSU" ]; then
-                return 0
-              fi
-
+            fix_fdinfo_mask_decl() {
               local file="./fs/notify/fdinfo.c"
               [ -f "$file" ] || return 0
 
@@ -1851,33 +2003,26 @@ jobs:
 
           if new_lines != lines:
               path.write_text("".join(new_lines))
-              print("已修复 SukiSU fdinfo.c 中 mask 声明作用域")
+              print("已修复 fdinfo.c 中 mask 声明作用域")
           else:
-              print("SukiSU fdinfo.c mask 声明无需修改")
+              print("fdinfo.c mask 声明无需修改")
           PY
             }
 
             # Android 12 - 5.10 修复
-            if [[ "${{ inputs.android_version }}" == "android12" && "${{ inputs.kernel_version }}" == "5.10" ]]; then
+            if [[ "$ABK_ANDROID_VERSION" == "android12" && "$ABK_KERNEL_VERSION" == "5.10" ]]; then
               if sub_in_range "$CURRENT_SUB" 43 117; then
                 fix_task_mmu_show_pad
                 apply_susfs_optional_patch "Android 12 - 5.10 fdinfo.c" "a12-5.10/fdinfo.c.patch"
-                fix_sukisu_fdinfo_mask_decl
+                fix_fdinfo_mask_decl
                 apply_susfs_base_patch "Android 12 - 5.10 base.c" "a12-5.10/base.c.patch"
-                if [[ "${{ inputs.ksu_variant }}" == "SukiSU" && "${{ inputs.use_bbg }}" == "true" ]]; then
-                  fix_proc_base_missing_vma_decl
-                fi
-                if [[ "${{ inputs.ksu_variant }}" == "Official" && "${{ inputs.use_bbg }}" == "true" ]]; then
-                  fix_proc_base_missing_vma_decl
-                fi
-                if [[ "${{ inputs.ksu_variant }}" == "ReSukiSU" ]]; then
-                  fix_proc_base_missing_vma_decl
-                fi
               fi
+              fix_proc_base_missing_vma_decl
+              fix_namei_set_nameidata_arity
             fi
 
             # Android 13 - 5.15 修复
-            if [[ "${{ inputs.android_version }}" == "android13" && "${{ inputs.kernel_version }}" == "5.15" ]]; then
+            if [[ "$ABK_ANDROID_VERSION" == "android13" && "$ABK_KERNEL_VERSION" == "5.15" ]]; then
               if sub_in_range "$CURRENT_SUB" 41 137; then
                 apply_susfs_optional_patch "Android 13 - 5.15 namespace.c" "a13-5.15/namespace.c.patch"
                 if [[ "$CURRENT_SUB" -eq 41 ]] && grep -qF 'static_branch_unlikely(&susfs_is_sdcard_android_data_not_decrypted)' ./fs/namespace.c; then
@@ -1907,16 +2052,16 @@ jobs:
                   fi
                 fi
                 apply_susfs_optional_patch "Android 13 - 5.15 fdinfo.c" "a13-5.15/fdinfo.c.patch"
-                fix_sukisu_fdinfo_mask_decl
+                fix_fdinfo_mask_decl
                 apply_susfs_optional_patch "Android 13 - 5.15 open.c" "a13-5.15/open.c.patch"
-                if [[ "${{ inputs.os_patch_level }}" != "2024-05" ]]; then
+                if [[ "$ABK_OS_PATCH_LEVEL" != "2024-05" ]]; then
                   fix_task_mmu_show_pad
                 fi
               fi
             fi
 
             # Android 14 - 6.1 修复
-            if [[ "${{ inputs.android_version }}" == "android14" && "${{ inputs.kernel_version }}" == "6.1" ]]; then
+            if [[ "$ABK_ANDROID_VERSION" == "android14" && "$ABK_KERNEL_VERSION" == "6.1" ]]; then
               if sub_in_range "$CURRENT_SUB" 25 162; then
                 apply_susfs_base_patch "Android 14 - 6.1 base.c" "a14-6.1/base.c.patch"
                 if grep -q 'susfs_is_current_proc_umounted\|SUSFS_IS_INODE_SUS_MAP\|SUSFS_IS_INODE_OPEN_REDIRECT' ./fs/proc/base.c && ! grep -qF '#include <linux/susfs_def.h>' ./fs/proc/base.c; then
@@ -1926,7 +2071,7 @@ jobs:
                     sed -i '/#include <linux\/cpufreq_times.h>/a #if defined(CONFIG_KSU_SUSFS_SUS_MAP) || defined(CONFIG_KSU_SUSFS_OPEN_REDIRECT)\n#include <linux\/susfs_def.h>\n#endif' ./fs/proc/base.c
                   fi
                 fi
-                if [[ "${{ inputs.os_patch_level }}" != "2024-05" ]]; then
+                if [[ "$ABK_OS_PATCH_LEVEL" != "2024-05" ]]; then
                   fix_task_mmu_show_pad
                 fi
                 # 修复 6.1 LTS: SUSFS 补丁在 namespace.c 头部 hunk 因上下文不匹配而失败，
@@ -1942,8 +2087,8 @@ jobs:
             fi
 
             # Android 15 - 6.6 修复
-            if [[ "${{ inputs.android_version }}" == "android15" && "${{ inputs.kernel_version }}" == "6.6" ]]; then
-              if [[ "${{ inputs.ksu_variant }}" == "Official" ]] && { sub_in_range "$CURRENT_SUB" 50 58 || sub_in_range "$CURRENT_SUB" 98 127; }; then
+            if [[ "$ABK_ANDROID_VERSION" == "android15" && "$ABK_KERNEL_VERSION" == "6.6" ]]; then
+              if [[ "$ABK_KSU_VARIANT" == "Official" ]] && { sub_in_range "$CURRENT_SUB" 50 58 || sub_in_range "$CURRENT_SUB" 98 127; }; then
                 fix_selinux_extern_static
               fi
               if sub_in_range "$CURRENT_SUB" 98 127; then
@@ -1966,7 +2111,7 @@ jobs:
             fi
 
             # Android 16 - 6.12 修复
-            if [[ "${{ inputs.android_version }}" == "android16" && "${{ inputs.kernel_version }}" == "6.12" ]]; then
+            if [[ "$ABK_ANDROID_VERSION" == "android16" && "$ABK_KERNEL_VERSION" == "6.12" ]]; then
               # 修复 setuid_hook.c 重复定义
               SETUID_HOOK="$KERNEL_ROOT/common/drivers/kernelsu/setuid_hook.c"
               if [ -f "$SETUID_HOOK" ]; then
@@ -1984,10 +2129,12 @@ jobs:
                 echo "已修复 exec.c 缺少 susfs_def.h 问题"
               fi
             fi
+
+            fix_task_mmu_vma_pad_start
           fi
 
-      - name: 注入 SukiSU SUSFS Kconfig
-        if: inputs.enable_susfs && inputs.ksu_variant == 'SukiSU'
+      - name: 确保 SUSFS Kconfig 与核心对象
+        if: inputs.enable_susfs && inputs.ksu_variant != 'None'
         working-directory: ${{ env.KERNEL_ROOT }}
         run: |
           set -euo pipefail
@@ -1999,19 +2146,18 @@ jobs:
             fi
           done
           if [ -z "$KSU_KERNEL_DIR" ]; then
-            echo "::error::未找到 SukiSU Kconfig，无法注入 SUSFS Kconfig 符号"
+            echo "::error::未找到 ${{ inputs.ksu_variant }} Kconfig，无法注入 SUSFS Kconfig 符号"
             exit 1
           fi
 
-          python3 - "$KSU_KERNEL_DIR/Kconfig" <<'PY'
+          python3 - "$KSU_KERNEL_DIR/Kconfig" "$KSU_KERNEL_DIR" <<'PY'
           from pathlib import Path
+          import re
           import sys
 
           path = Path(sys.argv[1])
+          ksu_dir = Path(sys.argv[2])
           text = path.read_text()
-          if "config KSU_SUSFS" in text:
-              print(f"{path} 已包含 SUSFS Kconfig 符号")
-              raise SystemExit(0)
 
           options = [
               ("KSU_SUSFS", "KernelSU addon - SUSFS", ["KSU", "THREAD_INFO_IN_TASK"]),
@@ -2026,21 +2172,84 @@ jobs:
               ("KSU_SUSFS_SUS_MAP", "Enable to hide suspicious maps", ["KSU_SUSFS"]),
           ]
 
-          lines = ["", 'menu "KernelSU - SUSFS"']
-          for name, prompt, deps in options:
-              lines.extend([f"config {name}", f'  bool "{prompt}"'])
-              lines.extend(f"  depends on {dep}" for dep in deps)
-              lines.extend(["  default y", ""])
-          lines.append("endmenu")
-          block = "\n".join(lines)
+          def defined_symbols(value):
+              return set(re.findall(
+                  r"(?m)^[ \t]*(?:menuconfig|config)[ \t]+([A-Za-z0-9_]+)\b",
+                  value,
+              ))
 
-          marker = "\nendmenu\n"
-          if marker in text:
-              text = text.rsplit(marker, 1)[0].rstrip() + "\n" + block + marker
+          missing_options = [option for option in options if option[0] not in defined_symbols(text)]
+          if missing_options:
+              lines = ["", 'menu "KernelSU - SUSFS (ABK compatibility)"']
+              for name, prompt, deps in missing_options:
+                  lines.extend([f"config {name}", f'  bool "{prompt}"'])
+                  lines.extend(f"  depends on {dep}" for dep in deps)
+                  lines.extend(["  default y", ""])
+              lines.append("endmenu")
+              block = "\n".join(lines)
+
+              marker = "\nendmenu\n"
+              if marker in text:
+                  text = text.rsplit(marker, 1)[0].rstrip() + "\n" + block + marker
+              else:
+                  text = text.rstrip() + "\n" + block + "\n"
+              path.write_text(text)
+              print(f"已向 {path} 注入缺失的 SUSFS Kconfig 符号: "
+                    f"{', '.join(option[0] for option in missing_options)}")
           else:
-              text = text.rstrip() + "\n" + block + "\n"
-          path.write_text(text)
-          print(f"已注入 {path} 的 SukiSU SUSFS Kconfig 符号")
+              print(f"{path} 已包含全部 SUSFS Kconfig 符号")
+
+          required_symbols = {option[0] for option in options}
+          still_missing = sorted(required_symbols - defined_symbols(path.read_text()))
+          if still_missing:
+              raise SystemExit(f"{path} 注入后仍缺少 SUSFS Kconfig 符号: {still_missing}")
+
+          susfs_source = Path("./common/fs/susfs.c")
+          fs_makefile = Path("./common/fs/Makefile")
+          if not susfs_source.exists():
+              raise SystemExit(f"未找到 {susfs_source}，无法提供 SUSFS 核心符号")
+          if not fs_makefile.exists():
+              raise SystemExit(f"未找到 {fs_makefile}，无法接入 SUSFS 核心对象")
+
+          makefile_text = fs_makefile.read_text()
+          susfs_object_rule = re.compile(
+              r"(?m)^[ \t]*obj-\$\(CONFIG_KSU_SUSFS\)[ \t]*\+=[ \t]*susfs\.o(?:[ \t]|$)"
+          )
+          if not susfs_object_rule.search(makefile_text):
+              makefile_text = makefile_text.rstrip() + (
+                  "\n\n# ABK: ensure the SUSFS provider is linked when its Kconfig is enabled.\n"
+                  "obj-$(CONFIG_KSU_SUSFS) += susfs.o\n"
+              )
+              fs_makefile.write_text(makefile_text)
+              print(f"已补齐 {fs_makefile} 的 SUSFS 核心对象规则")
+          else:
+              print(f"{fs_makefile} 已接入 SUSFS 核心对象")
+
+          provider_patterns = {
+              "susfs_extra_works": r"(?m)^[ \t]*struct[ \t]+work_struct[ \t]+susfs_extra_works[ \t]*;",
+              "susfs_get_enabled_features": r"(?m)^[ \t]*void[ \t]+susfs_get_enabled_features[ \t]*\(",
+              "susfs_set_avc_log_spoofing": r"(?m)^[ \t]*void[ \t]+susfs_set_avc_log_spoofing[ \t]*\(",
+              "susfs_show_version": r"(?m)^[ \t]*void[ \t]+susfs_show_version[ \t]*\(",
+              "susfs_show_variant": r"(?m)^[ \t]*void[ \t]+susfs_show_variant[ \t]*\(",
+              "susfs_start_sdcard_monitor_fn": r"(?m)^[ \t]*void[ \t]+susfs_start_sdcard_monitor_fn[ \t]*\(",
+          }
+          caller_text = "\n".join(
+              source.read_text(errors="ignore")
+              for source in ksu_dir.rglob("*.c")
+          )
+          provider_text = susfs_source.read_text()
+          missing_providers = [
+              symbol for symbol, pattern in provider_patterns.items()
+              if re.search(rf"\b{re.escape(symbol)}\b", caller_text)
+              and not re.search(pattern, provider_text)
+          ]
+          if missing_providers:
+              raise SystemExit(
+                  f"{susfs_source} 缺少 KernelSU 已引用的 SUSFS 核心符号: {missing_providers}"
+              )
+          if not susfs_object_rule.search(fs_makefile.read_text()):
+              raise SystemExit(f"{fs_makefile} 注入后仍未接入 susfs.o")
+          print("SUSFS Kconfig 与核心链接契约校验通过")
           PY
 
       - name: 注入 SukiSU/ReSukiSU KPM Kconfig
