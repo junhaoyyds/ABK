@@ -87,6 +87,11 @@
             android:foregroundServiceType="dataSync"
             android:exported="false" />
 
+        <service
+            android:name=".agent.AbkAgentService"
+            android:foregroundServiceType="dataSync"
+            android:exported="true" />
+
         <receiver
             android:name=".extensions.AbkExtensionBootReceiver"
             android:enabled="true"

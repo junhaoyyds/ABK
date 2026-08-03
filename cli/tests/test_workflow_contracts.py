@@ -72,6 +72,13 @@ def build_args(**overrides):
 
 
 class WorkflowContractTests(unittest.TestCase):
+    def test_desktop_workflow_limits_github_token_permissions(self):
+        workflow = (
+            REPO_ROOT / ".github" / "workflows" / "build-abk-desktop.yml"
+        ).read_text(encoding="utf-8")
+
+        self.assertIn("permissions:\n  contents: read", workflow)
+
     def assert_inputs_supported(self, workflow_name, inputs):
         declared = workflow_dispatch_inputs(
             REPO_ROOT / ".github" / "workflows" / workflow_name

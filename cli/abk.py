@@ -4950,24 +4950,61 @@ def _redact_secret_text(value, secrets):
     return value
 
 
+_SENSITIVE_JSON_KEYS = frozenset({
+    "access_token",
+    "accesstoken",
+    "api_key",
+    "apikey",
+    "authorization",
+    "client_secret",
+    "clientsecret",
+    "cookie",
+    "kpm_password",
+    "kpmpassword",
+    "password",
+    "private_key",
+    "privatekey",
+    "secret",
+    "secret_value",
+    "secretvalue",
+    "token",
+})
+
+
+def _is_sensitive_json_key(key):
+    if not isinstance(key, str):
+        return False
+    normalized = re.sub(r"[^a-z0-9]", "", key.lower())
+    return normalized in {
+        re.sub(r"[^a-z0-9]", "", item)
+        for item in _SENSITIVE_JSON_KEYS
+    }
+
+
 def _redact_json_secrets(value, secrets, sensitive_context=False):
     if isinstance(value, dict):
-        return {
-            key: _redact_json_secrets(
+        redacted = {}
+        for key, item in value.items():
+            if _is_sensitive_json_key(key):
+                redacted[key] = None if item is None else "***"
+                continue
+            redacted[key] = _redact_json_secrets(
                 item,
                 secrets,
-                sensitive_context or key.lower() in {
-                    "error",
-                    "message",
-                    "detail",
-                    "details",
-                    "stderr",
-                    "stdout",
-                    "output",
-                },
+                sensitive_context or (
+                    isinstance(key, str)
+                    and key.lower() in {
+                        "error",
+                        "message",
+                        "detail",
+                        "details",
+                        "stderr",
+                        "stdout",
+                        "output",
+                    }
+                ),
             )
-            for key, item in value.items()
-        }
+        return redacted
     if isinstance(value, list):
         return [
             _redact_json_secrets(item, secrets, sensitive_context)
@@ -4975,6 +5012,14 @@ def _redact_json_secrets(value, secrets, sensitive_context=False):
         ]
     if isinstance(value, str) and sensitive_context:
         value = _redact_secret_text(value, secrets)
+    elif isinstance(value, str):
+        # Avoid corrupting ordinary fields when a deliberately short password
+        # is supplied, while still masking normal-length tokens anywhere in a
+        # machine-readable response.
+        value = _redact_secret_text(
+            value,
+            {secret for secret in secrets if len(secret) >= 3},
+        )
     return value
 
 
@@ -5028,14 +5073,15 @@ def _run_json_command(args):
     payload.setdefault("error", None)
     payload.setdefault("errorCode", None)
     secrets = _collect_json_secrets(args)
-    payload = _redact_json_secrets(payload, secrets)
+    redacted_payload = _redact_json_secrets(payload, secrets)
+    json_document = json.dumps(
+        redacted_payload,
+        ensure_ascii=False,
+        separators=(",", ":"),
+        default=str,
+    )
     sys.stdout.write(
-        json.dumps(
-            payload,
-            ensure_ascii=False,
-            separators=(",", ":"),
-            default=str,
-        ) + "\n"
+        json_document + "\n"
     )
     sys.stdout.flush()
     return exit_code
