@@ -76,9 +76,6 @@ jobs:
       CCACHE_MAXSIZE: 8G
 
     steps:
-      - name: 检出 ABK 补丁仓库
-        uses: actions/checkout@v6
-
       - name: 构建信息摘要
         shell: bash
         run: |
@@ -226,6 +223,9 @@ jobs:
           remove-haskell: "true"
           remove-codeql: "true"
 
+      - name: 检出 ABK 补丁仓库
+        uses: actions/checkout@v6
+
       - name: 安装依赖
         shell: bash
         run: |
@@ -247,7 +247,7 @@ jobs:
 
           apt_update_retry
           sudo DEBIAN_FRONTEND=noninteractive apt-get install -yq --no-install-recommends \
-            python3 git curl ccache libelf-dev build-essential flex bison libssl-dev \
+            python3 git curl ccache libelf-dev libdw-dev build-essential flex bison libssl-dev \
             libncurses-dev liblz4-tool zlib1g-dev libxml2-utils rsync unzip gawk \
             dos2unix zip gcc-aarch64-linux-gnu
           if ! command -v repo >/dev/null 2>&1; then
@@ -288,6 +288,15 @@ jobs:
             -b "refs/heads/oneplus/${CPU}" \
             -m "${DEVICE_MANIFEST}.xml" \
             --depth=1
+          case "$DEVICE_MANIFEST" in
+            oneplus_15|oneplus_15t)
+              manifest_path=".repo/manifests/${DEVICE_MANIFEST}.xml"
+              if [ ! -f "$manifest_path" ]; then
+                manifest_path=".repo/manifest.xml"
+              fi
+              python3 "$GITHUB_WORKSPACE/.github/scripts/sanitize-oneplus-manifest.py" "$manifest_path"
+              ;;
+          esac
           repo sync -c -j"$(nproc --all)" --no-tags --no-clone-bundle --force-sync
 
       - name: 准备 KernelSU 和补丁
@@ -325,6 +334,9 @@ jobs:
                 exit 1
                 ;;
             esac
+            if [ "$KSU_VARIANT" = "Official" ]; then
+              bash "$GITHUB_WORKSPACE/.github/scripts/ensure-kernelsu-uapi.sh" "$KERNEL_ROOT"
+            fi
           fi
 
           cd "$WORKSPACE"
@@ -934,6 +946,7 @@ jobs:
         run: |
           set -euo pipefail
           WORKSPACE="$GITHUB_WORKSPACE/oneplus_workspace"
+          KERNEL_ROOT="$WORKSPACE/kernel_workspace/kernel_platform"
           COMMON_ROOT="$WORKSPACE/kernel_workspace/kernel_platform/common"
           cd "$COMMON_ROOT"
 
@@ -942,7 +955,15 @@ jobs:
           export KBUILD_BUILD_HOST="abk"
           export KBUILD_BUILD_VERSION=1
 
-          MAKE_COMMON=(make -j"$(nproc --all)" LLVM=1 ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- CC="ccache clang" PAHOLE=../../prebuilts/kernel-build-tools/linux-x86/bin/pahole LD=ld.lld HOSTLD=ld.lld O=out)
+          KSU_KCFLAGS=()
+          if [ "$KSU_VARIANT" = "Official" ] && [ -d "$KERNEL_ROOT/KernelSU/uapi" ]; then
+            KSU_KCFLAGS=(
+              "KCFLAGS+=-I$KERNEL_ROOT/KernelSU"
+              "KCFLAGS+=-I$KERNEL_ROOT/KernelSU/kernel"
+              "KCFLAGS+=-I$KERNEL_ROOT/KernelSU/kernel/include"
+            )
+          fi
+          MAKE_COMMON=(make -j"$(nproc --all)" LLVM=1 ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- CC="ccache clang" PAHOLE=../../prebuilts/kernel-build-tools/linux-x86/bin/pahole LD=ld.lld HOSTLD=ld.lld O=out "${KSU_KCFLAGS[@]}")
           case "$KERNEL_VERSION" in
             6.1)
               export KBUILD_BUILD_TIMESTAMP="Tue Mar 10 03:53:33 UTC 2026"
@@ -967,7 +988,7 @@ jobs:
               ;;
             5.10)
               export PATH="$WORKSPACE/kernel_workspace/kernel_platform/prebuilts-master/clang/host/linux-x86/clang-r416183b/bin:$PATH"
-              make -j"$(nproc --all)" LLVM_IAS=1 LLVM=1 ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- CC="ccache clang" RUSTC=../../prebuilts/rust/linux-x86/1.73.0b/bin/rustc PAHOLE=../../prebuilts/kernel-build-tools/linux-x86/bin/pahole LD=ld.lld HOSTLD=ld.lld O=out gki_defconfig all
+              make -j"$(nproc --all)" LLVM_IAS=1 LLVM=1 ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- CC="ccache clang" RUSTC=../../prebuilts/rust/linux-x86/1.73.0b/bin/rustc PAHOLE=../../prebuilts/kernel-build-tools/linux-x86/bin/pahole LD=ld.lld HOSTLD=ld.lld O=out "${KSU_KCFLAGS[@]}" gki_defconfig all
               ;;
           esac
           ccache -s

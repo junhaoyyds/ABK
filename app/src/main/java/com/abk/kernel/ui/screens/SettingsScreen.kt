@@ -114,13 +114,14 @@ fun SettingsScreen(
     var showThemeSettings by rememberSaveable { mutableStateOf(false) }
     var showAppProfileTemplates by rememberSaveable { mutableStateOf(false) }
     var showManagerTools by rememberSaveable { mutableStateOf(false) }
+    var showKernelCapabilities by rememberSaveable { mutableStateOf(false) }
     var showSusfsControl by rememberSaveable { mutableStateOf(false) }
     var showAboutPage by rememberSaveable { mutableStateOf(false) }
     var showOpenSourceLicenses by rememberSaveable { mutableStateOf(false) }
     var showExtensionManagerPage by rememberSaveable { mutableStateOf(false) }
     val scrollBehavior = TopAppBarDefaults.exitUntilCollapsedScrollBehavior(rememberTopAppBarState())
-    val showChildPage = showThemeSettings || showAppProfileTemplates || showManagerTools || showSusfsControl ||
-        showAboutPage || showOpenSourceLicenses || showExtensionManagerPage
+    val showChildPage = showThemeSettings || showAppProfileTemplates || showManagerTools || showKernelCapabilities ||
+        showSusfsControl || showAboutPage || showOpenSourceLicenses || showExtensionManagerPage
     val childPageTransition = rememberChildPageOverlayTransition(
         visible = showChildPage,
         label = "settings-child-page"
@@ -149,6 +150,7 @@ fun SettingsScreen(
         showThemeSettings = false
         showAppProfileTemplates = false
         showManagerTools = false
+        showKernelCapabilities = false
         showSusfsControl = false
         showAboutPage = false
         showOpenSourceLicenses = false
@@ -175,6 +177,8 @@ fun SettingsScreen(
         childPageBack.resetProgress()
         showAppProfileTemplates = false
         showManagerTools = false
+        showKernelCapabilities = false
+        showSusfsControl = false
         showAboutPage = false
         showOpenSourceLicenses = false
         showExtensionManagerPage = false
@@ -185,6 +189,8 @@ fun SettingsScreen(
         childPageBack.resetProgress()
         showThemeSettings = false
         showManagerTools = false
+        showKernelCapabilities = false
+        showSusfsControl = false
         showAboutPage = false
         showOpenSourceLicenses = false
         showExtensionManagerPage = false
@@ -197,6 +203,7 @@ fun SettingsScreen(
         showThemeSettings = false
         showAppProfileTemplates = false
         showSusfsControl = false
+        showKernelCapabilities = false
         showAboutPage = false
         showOpenSourceLicenses = false
         showExtensionManagerPage = false
@@ -204,11 +211,25 @@ fun SettingsScreen(
         vm.refreshManagerTools(force = true)
     }
 
+    fun openKernelCapabilities() {
+        childPageBack.resetProgress()
+        showThemeSettings = false
+        showAppProfileTemplates = false
+        showManagerTools = false
+        showSusfsControl = false
+        showAboutPage = false
+        showOpenSourceLicenses = false
+        showExtensionManagerPage = false
+        showKernelCapabilities = true
+        vm.refreshKernelCapabilities(force = true)
+    }
+
     fun openSusfsControl() {
         childPageBack.resetProgress()
         showThemeSettings = false
         showAppProfileTemplates = false
         showManagerTools = false
+        showKernelCapabilities = false
         showAboutPage = false
         showOpenSourceLicenses = false
         showExtensionManagerPage = false
@@ -221,6 +242,7 @@ fun SettingsScreen(
         showThemeSettings = false
         showAppProfileTemplates = false
         showManagerTools = false
+        showKernelCapabilities = false
         showOpenSourceLicenses = false
         showExtensionManagerPage = false
         showAboutPage = true
@@ -231,6 +253,7 @@ fun SettingsScreen(
         showThemeSettings = false
         showAppProfileTemplates = false
         showManagerTools = false
+        showKernelCapabilities = false
         showAboutPage = false
         showExtensionManagerPage = false
         showOpenSourceLicenses = true
@@ -241,6 +264,7 @@ fun SettingsScreen(
         showThemeSettings = false
         showAppProfileTemplates = false
         showManagerTools = false
+        showKernelCapabilities = false
         showAboutPage = false
         showOpenSourceLicenses = false
         showExtensionManagerPage = true
@@ -320,6 +344,7 @@ fun SettingsScreen(
                 onOpenThemeSettings = ::openThemeSettings,
                 onOpenAppProfileTemplates = ::openAppProfileTemplates,
                 onOpenManagerTools = ::openManagerTools,
+                onOpenKernelCapabilities = ::openKernelCapabilities,
                 onOpenSusfsControl = ::openSusfsControl,
                 onOpenInstalledModules = onOpenInstalledModules,
                 onAbout = ::openAboutPage,
@@ -523,6 +548,57 @@ fun SettingsScreen(
         }
 
         childPageTransition.AnimatedVisibility(
+            visible = { it && showKernelCapabilities },
+            enter = childPageOverlayEnterTransition(state.predictiveBackEnabled, motionScheme),
+            exit = childPageOverlayExitTransition(state.predictiveBackEnabled, motionScheme),
+            modifier = childPageModifier
+        ) {
+            val refreshPresentation = rememberAbkInteractiveRefreshPresentation(loading = state.kernelCapabilitiesLoading)
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .then(childPageBack.backTransformModifier())
+            ) {
+                SettingsPageBackground(
+                    backgroundUri = state.customBackgroundUri,
+                    backgroundImageEnabled = state.backgroundImageEnabled
+                )
+                Scaffold(
+                    containerColor = Color.Transparent,
+                    topBar = {
+                        ExpressiveTopBar(
+                            title = stringResource(R.string.settings_kernel_capabilities),
+                            navigationIcon = {
+                                IconButton(onClick = childPageBack::requestDismiss) {
+                                    Icon(Icons.Default.ArrowBack, contentDescription = stringResource(R.string.settings_back))
+                                }
+                            },
+                            actions = {
+                                IconButton(onClick = {
+                                    refreshPresentation.beginRefresh()
+                                    vm.refreshKernelCapabilities(force = true)
+                                }) {
+                                    Icon(Icons.Default.Refresh, contentDescription = stringResource(R.string.refresh))
+                                }
+                            }
+                        )
+                    }
+                ) {
+                    KernelCapabilitiesSettingsScreen(
+                        padding = it,
+                        state = state,
+                        showRefreshLoading = refreshPresentation.showLoading,
+                        onRefresh = {
+                            refreshPresentation.beginRefresh()
+                            vm.refreshKernelCapabilities(force = true)
+                        },
+                        onTcpAlgorithmSelected = vm::setTcpCongestionControlAlgorithm
+                    )
+                }
+            }
+        }
+
+        childPageTransition.AnimatedVisibility(
             visible = { it && showSusfsControl },
             enter = childPageOverlayEnterTransition(state.predictiveBackEnabled, motionScheme),
             exit = childPageOverlayExitTransition(state.predictiveBackEnabled, motionScheme),
@@ -671,6 +747,7 @@ private fun SettingsMainContent(
     onOpenThemeSettings: () -> Unit,
     onOpenAppProfileTemplates: () -> Unit,
     onOpenManagerTools: () -> Unit,
+    onOpenKernelCapabilities: () -> Unit,
     onOpenSusfsControl: () -> Unit,
     onOpenInstalledModules: () -> Unit,
     onAbout: () -> Unit,
@@ -896,6 +973,7 @@ private fun SettingsMainContent(
             vm = vm,
             onOpenAppProfileTemplates = onOpenAppProfileTemplates,
             onOpenManagerTools = onOpenManagerTools,
+            onOpenKernelCapabilities = onOpenKernelCapabilities,
             onOpenSusfsControl = onOpenSusfsControl,
             onOpenInstalledModules = onOpenInstalledModules
         )
@@ -1017,6 +1095,7 @@ private fun ManagerInjectedSettingsGroup(
     vm: MainViewModel,
     onOpenAppProfileTemplates: () -> Unit,
     onOpenManagerTools: () -> Unit,
+    onOpenKernelCapabilities: () -> Unit,
     onOpenSusfsControl: () -> Unit,
     onOpenInstalledModules: () -> Unit
 ) {
@@ -1071,6 +1150,7 @@ private fun ManagerInjectedSettingsGroup(
                             when (item.id) {
                                 "app_profile_templates" -> onOpenAppProfileTemplates()
                                 "manager_tools" -> onOpenManagerTools()
+                                "kernel_capabilities" -> onOpenKernelCapabilities()
                                 "susfs_control" -> onOpenSusfsControl()
                                 "kpm" -> onOpenInstalledModules()
                             }
@@ -1314,6 +1394,109 @@ private fun TimedConfirmationDialog(
 private enum class SecurityKeyImportTarget {
     PUBLIC,
     PRIVATE,
+}
+
+@Composable
+private fun KernelCapabilitiesSettingsScreen(
+    padding: PaddingValues,
+    state: MainUiState,
+    showRefreshLoading: Boolean,
+    onRefresh: () -> Unit,
+    onTcpAlgorithmSelected: (String) -> Unit
+) {
+    val tcp = state.kernelTcpCongestionControl
+    val showInitialLoading = state.kernelCapabilitiesLoading && tcp == null && state.kernelCapabilitiesError == null
+
+    Column(
+        modifier = Modifier
+            .padding(padding)
+            .fillMaxSize()
+            .verticalScroll(rememberScrollState())
+            .padding(horizontal = AbkScreenHorizontalPadding),
+        verticalArrangement = Arrangement.spacedBy(12.dp)
+    ) {
+        Crossfade(targetState = showRefreshLoading || showInitialLoading, label = "kernel-capabilities-refresh") { refreshing ->
+            if (refreshing) {
+                AbkInlineLoadingPill(
+                    text = stringResource(
+                        if (showRefreshLoading) {
+                            R.string.settings_kernel_capabilities_refreshing
+                        } else {
+                            R.string.loading
+                        }
+                    ),
+                    modifier = Modifier.fillMaxWidth(),
+                    compact = false
+                )
+            } else {
+                Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    if (tcp != null && tcp.available) {
+                        SettingsGroup(title = stringResource(R.string.settings_tcp_congestion_control)) {
+                            val actionId = state.kernelCapabilityActionId
+                            val actionRunning = actionId != null
+                            tcp.availableAlgorithms.forEach { algorithm ->
+                                val selected = algorithm == tcp.currentAlgorithm
+                                val itemActionId = "tcp_congestion:$algorithm"
+                                ExpressiveListItem(
+                                    title = algorithm,
+                                    subtitle = if (selected) {
+                                        stringResource(R.string.settings_tcp_congestion_selected)
+                                    } else {
+                                        stringResource(R.string.settings_tcp_congestion_available)
+                                    },
+                                    leadingIcon = Icons.Default.Tune,
+                                    selected = selected,
+                                    enabled = !actionRunning && !selected,
+                                    trailingContent = {
+                                        when {
+                                            actionId == itemActionId -> LoadingIndicator(Modifier.size(22.dp))
+                                            selected -> Icon(Icons.Default.Check, contentDescription = null)
+                                        }
+                                    },
+                                    onClick = if (!selected) {
+                                        { onTcpAlgorithmSelected(algorithm) }
+                                    } else {
+                                        null
+                                    }
+                                )
+                            }
+                        }
+                    } else {
+                        SettingsGroup(title = stringResource(R.string.settings_kernel_capabilities)) {
+                            ExpressiveListItem(
+                                title = stringResource(R.string.settings_kernel_capabilities_unavailable),
+                                subtitle = state.kernelCapabilitiesError
+                                    ?: stringResource(R.string.settings_kernel_capabilities_unavailable_desc),
+                                leadingIcon = Icons.Default.Extension,
+                                trailingContent = {
+                                    IconButton(onClick = onRefresh) {
+                                        Icon(Icons.Default.Refresh, contentDescription = stringResource(R.string.refresh))
+                                    }
+                                }
+                            )
+                        }
+                    }
+
+                    state.kernelCapabilitiesError?.takeIf { it.isNotBlank() && tcp != null }?.let { error ->
+                        SettingsGroup(title = stringResource(R.string.settings_status)) {
+                            ExpressiveListItem(
+                                title = stringResource(R.string.settings_operation_incomplete),
+                                subtitle = error,
+                                leadingIcon = Icons.Default.Error,
+                                trailingContent = {
+                                    IconButton(onClick = onRefresh) {
+                                        Icon(Icons.Default.Refresh, contentDescription = stringResource(R.string.refresh))
+                                    }
+                                }
+                            )
+                        }
+                    }
+                }
+            }
+        }
+
+        Spacer(Modifier.height(80.dp))
+    }
 }
 
 @Composable
@@ -1755,6 +1938,7 @@ private fun managerSettingIcon(id: String) = when (id) {
     "default_umount_modules" -> Icons.Default.FolderDelete
     "webview_debug" -> Icons.Default.Code
     "susfs_control" -> Icons.Default.Extension
+    "kernel_capabilities" -> Icons.Default.Tune
     else -> Icons.Default.Settings
 }
 
@@ -2614,6 +2798,7 @@ private fun SettingsGroup(title: String, content: @Composable ColumnScope.() -> 
             "KernelSU" -> stringResource(R.string.settings_group_backend_desc, "KernelSU")
             stringResource(R.string.settings_manager_settings) -> stringResource(R.string.settings_group_manager_settings_desc)
             stringResource(R.string.settings_kernel_capabilities) -> stringResource(R.string.settings_group_kernel_capabilities_desc)
+            stringResource(R.string.settings_tcp_congestion_control) -> stringResource(R.string.settings_group_tcp_congestion_control_desc)
             stringResource(R.string.settings_system_tools) -> stringResource(R.string.settings_group_system_tools_desc)
             stringResource(R.string.settings_allowlist) -> stringResource(R.string.settings_group_allowlist_desc)
             stringResource(R.string.settings_tool_status) -> stringResource(R.string.settings_group_tool_status_desc)
@@ -2637,7 +2822,8 @@ private fun SettingsGroup(title: String, content: @Composable ColumnScope.() -> 
             stringResource(R.string.settings_theme) -> Icons.Default.Palette
             "ReSukiSU", "SukiSU", "KernelSU" -> Icons.Default.AdminPanelSettings
             stringResource(R.string.settings_manager_settings) -> Icons.Default.AdminPanelSettings
-            stringResource(R.string.settings_kernel_capabilities) -> Icons.Default.Extension
+            stringResource(R.string.settings_kernel_capabilities) -> Icons.Default.Tune
+            stringResource(R.string.settings_tcp_congestion_control) -> Icons.Default.Tune
             stringResource(R.string.settings_system_tools) -> Icons.Default.Build
             stringResource(R.string.settings_allowlist) -> Icons.Default.VerifiedUser
             stringResource(R.string.settings_tool_status) -> Icons.Default.Info
