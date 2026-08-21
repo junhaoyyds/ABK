@@ -589,7 +589,10 @@ const val KSU_VARIANT_OFFICIAL = "Official"
 const val KSU_VARIANT_SUKISU = "SukiSU"
 const val KSU_VARIANT_RESUKISU = "ReSukiSU"
 const val BUILD_TARGET_GKI = "gki"
+const val BUILD_TARGET_CUSTOM_SOURCE = "custom_source"
 const val BUILD_TARGET_ONEPLUS = "oneplus"
+const val SOURCE_ACCESS_PUBLIC = "public"
+const val SOURCE_ACCESS_GITHUB_PRIVATE = "github_private"
 
 val KSU_BRANCH_STANDARD_OPTIONS = listOf(
     KSU_BRANCH_STABLE,
@@ -614,6 +617,11 @@ val ONEPLUS_KSU_VARIANT_OPTIONS = listOf(
 // App-level build config model (mirrors kernel-custom.yml inputs)
 data class KernelBuildConfig(
     val buildTarget: String = BUILD_TARGET_GKI,
+    val sourceUrl: String = "",
+    val sourceRef: String = "",
+    val sourceAccessMode: String = SOURCE_ACCESS_PUBLIC,
+    val sourceDefconfigs: List<String> = listOf("gki_defconfig"),
+    val sourceDeviceLabel: String = "",
     val androidVersion: String = "android12",
     val kernelVersion: String = "5.10",
     val subLevel: String = "66",
@@ -860,6 +868,10 @@ data class DownloadedArtifact(
     val sourceAssetName: String? = null,
     val verified: Boolean = false,
     val verificationSummary: String? = null,
+    val manifestPayloadKind: String? = null,
+    val manifestKernelSource: String? = null,
+    val manifestFeatureStatus: String? = null,
+    val manifestClientNotice: String? = null,
     val category: ArtifactCategory = type.toArtifactCategory()
 )
 
@@ -906,16 +918,11 @@ fun WorkflowRun.isFailedFlashRun(): Boolean =
  */
 fun WorkflowRun.isKernelBuild(): Boolean {
     val workflowName = name.orEmpty().lowercase()
-    val lower = "${name.orEmpty()} ${displayTitle.orEmpty()}".lowercase()
-    if (lower.hasUtilityWorkflowSignal()) return false
+    if (workflowName.hasUtilityWorkflowSignal()) return false
     // The workflow name is more reliable than displayTitle, which can contain
     // user/commit text from a different build type.
     if (workflowName.hasManagerBuildSignal()) return false
     if (workflowName.hasKernelBuildSignal()) return true
-    // Negative signals: app / manager / certificate / utility workflows.
-    if (lower.hasManagerBuildSignal()) return false
-    // Positive signals: kernel build.
-    if (lower.hasKernelBuildSignal()) return true
     // Unknown — be conservative and exclude it from the kernel-only tile.
     return false
 }
@@ -928,15 +935,12 @@ fun WorkflowRun.isKernelBuild(): Boolean {
  */
 fun WorkflowRun.isManagerBuild(): Boolean {
     val workflowName = name.orEmpty().lowercase()
-    val lower = "${name.orEmpty()} ${displayTitle.orEmpty()}".lowercase()
-    if (lower.hasUtilityWorkflowSignal()) return false
+    if (workflowName.hasUtilityWorkflowSignal()) return false
     // The GitHub run display title can contain kernel parameters from the
     // triggering commit/title. The workflow name is the primary classifier.
     if (workflowName.hasManagerBuildSignal()) return true
     if (workflowName.hasKernelBuildSignal()) return false
-    // Kernel workflows often bundle a manager APK but are not manager-primary.
-    if (lower.hasKernelBuildSignal()) return false
-    return lower.hasManagerBuildSignal()
+    return false
 }
 
 /** Manager-primary workflow (Build ABK App / Dev), not a kernel build that bundles a manager APK. */
