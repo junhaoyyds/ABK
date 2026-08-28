@@ -367,6 +367,11 @@ def patch_syscall_bridge(path, changed_files):
     )
 
     modern_layout = "return ksu_handle_stat_sucompat(orig_nr, (struct pt_regs *)regs);" in text
+    # ABK-PATCH: 现代版 execveat 的 sucompat 已由 SUSFS 在 fs/exec.c do_execveat_common
+    # 钩子以旧版 5 参签名处理，syscall bridge 的 3 参调用点已失效，改为直接透传真实系统调用。
+    text = text.replace(
+        "ksu_handle_execveat_sucompat(filename_user, orig_nr, (struct pt_regs *)regs) :",
+        "ksu_syscall_table[orig_nr](regs) :", 1)
 
     if modern_layout:
         modern_pattern = re.compile(
