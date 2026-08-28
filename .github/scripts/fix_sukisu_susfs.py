@@ -337,6 +337,7 @@ int ksu_handle_stat(int *dfd, const char __user **filename_user, int *flags)
             if not skipping and ln.startswith("long ksu_handle_execveat_sucompat("):
                 skipping = True
                 depth = 0
+                continue  # 签名行本身不计括号，直接跳过，从函数体下一行开始配平
             if skipping:
                 depth += ln.count("{") - ln.count("}")
                 if depth <= 0:
