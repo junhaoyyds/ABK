@@ -71,6 +71,11 @@ int ksu_handle_stat(int *dfd, const char __user **filename_user, int *flags);
         marker = "long ksu_handle_execve_sucompat(const char __user **filename_user, int orig_nr, struct pt_regs *regs);"
         if marker not in text:
             die("missing modern sucompat execve marker")
+        # ABK-PATCH: 现代版 sucompat.h 自带 long ksu_handle_execveat_sucompat 声明，
+        # 若直接注入旧版 int 签名会 conflicting types。先移除现代声明再做整体替换。
+        modern_execveat_decl = "long ksu_handle_execveat_sucompat(const char __user **filename_user, int orig_nr, struct pt_regs *regs);"
+        if modern_execveat_decl in text:
+            text = text.replace(modern_execveat_decl + "\n", "", 1)
         compat = """
 #if defined(CONFIG_KSU_SUSFS)
 int ksu_handle_execveat_sucompat(int *fd, struct filename **filename_ptr, void *argv_user,
@@ -322,6 +327,26 @@ int ksu_handle_stat(int *dfd, const char __user **filename_user, int *flags)
 #endif
 #endif
 '''
+        # ABK-PATCH: 现代版 sucompat.c 自带 long ksu_handle_execveat_sucompat 定义，
+        # 与注入的旧版 int 签名重定义冲突。先按大括号配对移除现代定义。
+        c_lines = text.split("\n")
+        kept = []
+        skipping = False
+        depth = 0
+        for ln in c_lines:
+            if not skipping and ln.startswith("long ksu_handle_execveat_sucompat("):
+                skipping = True
+                depth = 0
+            if skipping:
+                depth += ln.count("{") - ln.count("}")
+                if depth <= 0:
+                    skipping = False
+                continue
+            kept.append(ln)
+        if skipping:
+            raise SystemExit(f"{path} 移除现代 execveat_sucompat 定义时括号未闭合")
+        text = "\n".join(kept)
+
         text = text.replace(marker, compat_block + marker, 1)
 
     write_if_changed(path, text, original, changed_files)
