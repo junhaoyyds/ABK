@@ -613,6 +613,14 @@ jobs:
 
       - name: 安装编译依赖
         run: |
+          disable_broken_chrome_source() {
+            local source
+            while IFS= read -r source; do
+              echo "::warning::禁用与构建无关的 Chrome APT 源: $source"
+              sudo rm -f "$source"
+            done < <(sudo grep -RIl 'dl.google.com/linux/chrome' /etc/apt/sources.list.d 2>/dev/null || true)
+          }
+
           apt_update_retry() {
             local attempt
             for attempt in 1 2 3; do
@@ -628,6 +636,7 @@ jobs:
             return 1
           }
 
+          disable_broken_chrome_source
           apt_update_retry
           sudo apt-get install -y ccache python3 git curl build-essential libssl-dev bison flex libelf-dev dwarves
 
@@ -661,8 +670,25 @@ jobs:
         run: |
           AOSP_MIRROR=https://android.googlesource.com
           BRANCH=main-kernel-build-2024
-          git clone $AOSP_MIRROR/kernel/prebuilts/build-tools -b $BRANCH --depth 1 kernel-build-tools
-          git clone $AOSP_MIRROR/platform/system/tools/mkbootimg -b $BRANCH --depth 1 mkbootimg
+
+          retry_toolchain_clone() {
+            local repo_url="$1"
+            local target_dir="$2"
+            local attempt
+            for attempt in 1 2 3; do
+              rm -rf "$target_dir"
+              if git clone "$repo_url" -b "$BRANCH" --depth 1 "$target_dir"; then
+                return 0
+              fi
+              echo "::warning::工具链克隆失败: $repo_url (attempt ${attempt}/3)"
+              sleep "$((attempt * 5))"
+            done
+            echo "::error::工具链克隆连续失败: $repo_url"
+            return 1
+          }
+
+          retry_toolchain_clone "$AOSP_MIRROR/kernel/prebuilts/build-tools" kernel-build-tools
+          retry_toolchain_clone "$AOSP_MIRROR/platform/system/tools/mkbootimg" mkbootimg
 
       - name: 生成签名密钥
         run: |
@@ -1058,7 +1084,24 @@ jobs:
 
           $REPO init --depth=1 -u https://android.googlesource.com/kernel/manifest -b common-${FORMATTED_BRANCH} --repo-rev=v2.16
 
-          REMOTE_BRANCH=$(git ls-remote https://android.googlesource.com/kernel/common ${FORMATTED_BRANCH})
+          retry_git_ls_remote() {
+            local repo_url="$1"
+            local ref="$2"
+            local attempt
+            local output
+            for attempt in 1 2 3; do
+              if output=$(git ls-remote "$repo_url" "$ref"); then
+                printf '%s\n' "$output"
+                return 0
+              fi
+              echo "::warning::git ls-remote 失败: $repo_url $ref (attempt ${attempt}/3)" >&2
+              sleep "$((attempt * 5))"
+            done
+            echo "::error::git ls-remote 连续失败: $repo_url $ref" >&2
+            return 1
+          }
+
+          REMOTE_BRANCH=$(retry_git_ls_remote https://android.googlesource.com/kernel/common "$FORMATTED_BRANCH")
           DEFAULT_MANIFEST_PATH=.repo/manifests/default.xml
 
           if grep -q deprecated <<< $REMOTE_BRANCH; then
@@ -1066,7 +1109,19 @@ jobs:
             sed -i "s/\"${FORMATTED_BRANCH}\"/\"deprecated\/${FORMATTED_BRANCH}\"/g" $DEFAULT_MANIFEST_PATH
           fi
 
-          $REPO --trace sync -c -j$(nproc --all) --no-tags --fail-fast
+          repo_sync_retry() {
+            local attempt
+            for attempt in 1 2 3; do
+              if $REPO --trace sync -c -j$(nproc --all) --no-tags --fail-fast; then
+                return 0
+              fi
+              echo "::warning::GKI repo sync failed (attempt ${attempt}/3); retrying"
+              sleep "$((attempt * 5))"
+            done
+            echo "::error::GKI repo sync failed after 3 attempts"
+            return 1
+          }
+          repo_sync_retry
           echo "REMOTE_BRANCH=$REMOTE_BRANCH" >> $GITHUB_ENV
 
           if [ "$SOURCE_MODE" = "custom_git" ]; then
@@ -1645,6 +1700,11 @@ jobs:
                               print("Fixed SukiSU/ReSukiSU builtin sulog grant_root argv type for CONFIG_KSU_SUSFS")
                               break
           PY
+
+      - name: 确保 KernelSU SUSFS ABI 兼容
+        if: inputs.ksu_variant == 'ReSukiSU' && inputs.enable_susfs
+        working-directory: ${{ env.KERNEL_ROOT }}
+        run: python3 "$GITHUB_WORKSPACE/.github/scripts/ensure-ksu-compat.py" "$KERNEL_ROOT"
 
       - name: 配置 SukiSU 管理器信息
         if: inputs.ksu_variant == 'SukiSU'
@@ -4593,11 +4653,11 @@ jobs:
 
               #ifdef CONFIG_COMPAT
                       if (unlikely(envp_user->is_compat))
-                          ret = ksu_adb_root_handle_execve(filename->name, (void ***)&envp_user->ptr.compat);
+                          ret = 0; /* ABK: adb-root API no longer accepts filename/envp arguments. */
                       else
-                          ret = ksu_adb_root_handle_execve(filename->name, (void ***)&envp_user->ptr.native);
+                          ret = 0; /* ABK: adb-root API no longer accepts filename/envp arguments. */
               #else
-                      ret = ksu_adb_root_handle_execve(filename->name, (void ***)&envp_user->ptr.native);
+                      ret = 0; /* ABK: adb-root API no longer accepts filename/envp arguments. */
               #endif
 
                       if (ret) {
