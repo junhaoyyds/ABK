@@ -1337,7 +1337,36 @@ jobs:
               ;;
             "SukiSU")
               echo "添加 SukiSU..."
-              curl -LSs "https://raw.githubusercontent.com/SukiSU-Ultra/SukiSU-Ultra/main/kernel/setup.sh" | bash -s $BRANCH
+              requested_ref="$BRANCH"
+              if [ -z "$requested_ref" ]; then
+                echo "::error::SukiSU 请求 ref 为空"
+                exit 1
+              fi
+
+              setup_script="$(mktemp)"
+              curl -fLSs "https://raw.githubusercontent.com/SukiSU-Ultra/SukiSU-Ultra/main/kernel/setup.sh" -o "$setup_script"
+              if grep -qF 'git checkout "$1" && echo "[-] Checked out $1." || echo "[-] Checkout default branch"' "$setup_script"; then
+                sed -i '/git checkout "\$1" && echo /c\        git checkout "$1" && echo "[-] Checked out $1."' "$setup_script"
+              fi
+              bash "$setup_script" "$requested_ref"
+              rm -f "$setup_script"
+
+              if [ ! -d KernelSU/.git ]; then
+                echo "::error::SukiSU setup 完成后未找到 KernelSU Git 仓库"
+                exit 1
+              fi
+              requested_head="$(git -C KernelSU rev-parse "${requested_ref}^{commit}" 2>/dev/null)" || {
+                echo "::error::SukiSU 无法解析请求 ref: $requested_ref"
+                exit 1
+              }
+              resolved_head="$(git -C KernelSU rev-parse HEAD)"
+              echo "SukiSU 请求 ref: $requested_ref"
+              echo "SukiSU 请求 HEAD: $requested_head"
+              echo "SukiSU 最终 HEAD: $resolved_head"
+              if [ "$requested_head" != "$resolved_head" ]; then
+                echo "::error::SukiSU setup 静默回退或检出错误: 请求 $requested_head，实际 $resolved_head"
+                exit 1
+              fi
               ;;
             "ReSukiSU")
               echo "添加 ReSukiSU..."
@@ -1702,7 +1731,11 @@ jobs:
           PY
 
       - name: 确保 KernelSU SUSFS ABI 兼容
-        if: inputs.ksu_variant == 'ReSukiSU' && inputs.enable_susfs
+        if: (inputs.ksu_variant == 'SukiSU' || inputs.ksu_variant == 'ReSukiSU') && inputs.enable_susfs
+        env:
+          BASH_ENV: ${{ inputs.source_mode == 'custom_git' && format('{0}/.github/scripts/custom-source-feature-env.sh', github.workspace) || '' }}
+          ABK_FEATURE_ID: kernelsu
+          ABK_FEATURE_FAILURE_MESSAGE: "KernelSU SUSFS ABI compatibility integration failed"
         working-directory: ${{ env.KERNEL_ROOT }}
         run: python3 "$GITHUB_WORKSPACE/.github/scripts/ensure-ksu-compat.py" "$KERNEL_ROOT"
 
@@ -2217,7 +2250,7 @@ jobs:
               fi
             }
 
-            fix_fdinfo_mask_decl() {
+            fix_fdinfo_declarations() {
               local file="./fs/notify/fdinfo.c"
               [ -f "$file" ] || return 0
 
@@ -2267,32 +2300,192 @@ jobs:
               line for line in lines[brace_line + 1:end]
               if not decl_re.match(line)
           ]
-          new_lines = (
-              lines[:brace_line + 1]
-              + ["\tu32 mask = mark->mask & IN_ALL_EVENTS;\n"]
-              + new_body
-              + lines[end:]
-          )
+          declarations = ["\tu32 mask = mark->mask & IN_ALL_EVENTS;\n"]
+          if re.search(r"(?m)^\s*mnt\s*=\s*real_mount\(", "".join(new_body)) \
+                  and not re.search(r"\bstruct\s+mount\s*\*\s*mnt\b", "".join(new_body)):
+              declarations.append("\tstruct mount *mnt;\n")
+          new_lines = lines[:brace_line + 1] + declarations + new_body + lines[end:]
 
           if new_lines != lines:
               path.write_text("".join(new_lines))
-              print("已修复 fdinfo.c 中 mask 声明作用域")
+              print("已修复 fdinfo.c 中局部变量声明")
           else:
-              print("fdinfo.c mask 声明无需修改")
+              print("fdinfo.c 局部变量声明无需修改")
           PY
             }
+
+            ensure_susfs_stat_compat() {
+              local file="./fs/stat.c"
+              [ -f "$file" ] || return 0
+
+              python3 - <<'PY'
+          from pathlib import Path
+          import re
+
+          path = Path("./fs/stat.c")
+          text = path.read_text()
+          # 仅当 stat.c 原生代码已是新式 idmap API（6.5+）时，才把 SUSFS 补丁带入的
+          # mnt_userns 旧式调用改写为 4 参 generic_fillattr；5.10/5.15/6.1 必须保持 3 参旧式，
+          # 否则会引用不存在的 AT_GETATTR_NOSEC 并触发 "expected 3, have 4"。
+          native_new_api = "struct mnt_idmap" in text or "mnt_idmap(path->mnt)" in text
+          if "mnt_userns" in text and native_new_api:
+              text = text.replace(
+                  "inode->i_op->getattr(mnt_userns, path, stat,\n\t\t\t\trequest_mask, query_flags);",
+                  "inode->i_op->getattr(idmap, path, stat,\n\t\t\t\trequest_mask, query_flags | AT_GETATTR_NOSEC);",
+              )
+              text = text.replace(
+                  "generic_fillattr(mnt_userns, inode, stat);",
+                  "generic_fillattr(idmap, request_mask, inode, stat);",
+              )
+              if "mnt_userns" in text:
+                  text = text.replace("mnt_userns", "idmap")
+              path.write_text(text)
+              print("已修复 fs/stat.c 的 mnt_userns -> idmap 兼容")
+          if "susfs_get_non_sus_mnt_id_unique_from_mnt(" in text:
+              declaration = "extern u64 susfs_get_non_sus_mnt_id_unique_from_mnt(struct mount *orig_mnt);"
+              call = text.find("susfs_get_non_sus_mnt_id_unique_from_mnt(")
+              declared = text.find(declaration)
+              if declared < 0 or declared > call:
+                  anchor = "extern void susfs_sus_kstat_spoof_generic_fillattr(struct inode *inode, struct kstat *stat, u32 result_mask);"
+                  if anchor in text:
+                      text = text.replace(anchor, anchor + "\n" + declaration, 1)
+                  else:
+                      include_anchor = "#include \"mount.h\"\n"
+                      if include_anchor not in text:
+                          raise SystemExit(f"无法定位 {path} 的 SUSFS stat 声明插入点")
+                      block = "#ifdef CONFIG_KSU_SUSFS_SUS_KSTAT\n" + declaration + "\n#endif\n"
+                      text = text.replace(include_anchor, include_anchor + "\n" + block, 1)
+                  path.write_text(text)
+                  print("已补齐 fs/stat.c 的 SUSFS mount id helper 原型")
+          PY
+            }
+
+            ensure_susfs_stat_compat
+
+            ensure_susfs_namespace_tail() {
+              local file="./fs/namespace.c"
+              [ -f "$file" ] || return 0
+
+              python3 - <<'PY'
+          from pathlib import Path
+          import re
+
+          path = Path("./fs/namespace.c")
+          text = path.read_text()
+          opens = len(re.findall(r"(?m)^[ \t]*#[ \t]*(if|ifdef|ifndef)\b", text))
+          closes = len(re.findall(r"(?m)^[ \t]*#[ \t]*endif\b", text))
+          # SUSFS 上游偶发坏 hunk 头（声明的新行数少于实际行数，如 +4454,34 实为 43）时，
+          # patch 只截取尾部一部分，留下未闭合的 #ifdef CONFIG_KSU_SUSFS，
+          # 编译报 "unterminated conditional directive"。按已知截断签名补齐尾部。
+          if closes >= opens or not text.rstrip().endswith("if (!mnt->mnt.mnt_root || IS_ERR(mnt->mnt.mnt_root)) {"):
+              raise SystemExit(0)
+          completion = (
+              "\t\tmntput(&mnt->mnt);\n"
+              "\t\tunlock_mount_hash();\n"
+              "\t\treturn vfsmnt;\n"
+              "\t}\n"
+              "\tdget(mnt->mnt.mnt_root);\n"
+              "\tunlock_mount_hash();\n"
+              "\treturn &mnt->mnt;\n"
+              "}\n"
+              "#endif // #ifdef CONFIG_KSU_SUSFS\n"
+          )
+          path.write_text(text.rstrip("\n") + "\n" + completion)
+          print("已补齐 fs/namespace.c 被截断的 SUSFS 尾部")
+          PY
+            }
+
+            ensure_susfs_namespace_tail
+
+            ensure_susfs_super_compat() {
+              local file="./fs/super.c"
+              [ -f "$file" ] || return 0
+
+              python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path("./fs/super.c")
+          text = path.read_text()
+          needed = (
+              "susfs_is_current_ksu_domain",
+              "susfs_is_sdcard_android_data_not_decrypted",
+              "DEFAULT_KSU_MNT_MINOR_DEV",
+          )
+          if not any(name in text for name in needed):
+              raise SystemExit(0)
+
+          if "#include <linux/susfs_def.h>" not in text:
+              anchor = "#include <linux/fs_context.h>\n"
+              if anchor not in text:
+                  raise SystemExit(f"无法定位 {path} 的 susfs_def.h 插入点")
+              text = text.replace(anchor, anchor + "#ifdef CONFIG_KSU_SUSFS\n#include <linux/susfs_def.h>\n#endif\n", 1)
+
+          if "extern bool susfs_is_current_ksu_domain(void);" not in text:
+              anchor = '#include "internal.h"\n'
+              if anchor not in text:
+                  raise SystemExit(f"无法定位 {path} 的 SUSFS extern 插入点")
+              block = (
+                  "\n#ifdef CONFIG_KSU_SUSFS_SUS_MOUNT\n"
+                  "extern bool susfs_is_current_ksu_domain(void);\n"
+                  "extern struct static_key_true susfs_is_sdcard_android_data_not_decrypted;\n"
+                  "#ifndef DEFAULT_KSU_MNT_MINOR_DEV\n"
+                  "#define DEFAULT_KSU_MNT_MINOR_DEV (1 << 12)\n"
+                  "#endif\n"
+                  "#endif\n"
+              )
+              text = text.replace(anchor, anchor + block, 1)
+
+          path.write_text(text)
+          print("已补齐 fs/super.c 的 SUSFS include/extern 声明")
+          PY
+            }
+
+            ensure_susfs_super_compat
 
             # Android 12 - 5.10 修复
             if [[ "$ABK_ANDROID_VERSION" == "android12" && "$ABK_KERNEL_VERSION" == "5.10" ]]; then
               if sub_in_range "$CURRENT_SUB" 43 117; then
                 fix_task_mmu_show_pad
                 apply_susfs_optional_patch "Android 12 - 5.10 fdinfo.c" "a12-5.10/fdinfo.c.patch"
-                fix_fdinfo_mask_decl
+                fix_fdinfo_declarations
                 apply_susfs_base_patch "Android 12 - 5.10 base.c" "a12-5.10/base.c.patch"
               fi
               fix_proc_base_missing_vma_decl
               fix_namei_set_nameidata_arity
+              # Android 12/5.10 的上游补丁在 statfs.c 本地声明该 helper；
+              # 某些分支头部 hunk 漏打，且 susfs_def.h 并不提供该原型。
+              python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path("./fs/statfs.c")
+          text = path.read_text()
+          declaration = "extern int susfs_sus_kstat_spoof_vfs_statfs(struct inode *inode, struct kstatfs *buf, bool *is_fuse);"
+          call = text.find("susfs_sus_kstat_spoof_vfs_statfs(")
+          declared = text.find(declaration)
+          if call >= 0 and (declared < 0 or declared > call):
+              block = f"#ifdef CONFIG_KSU_SUSFS_SUS_KSTAT\n{declaration}\n#endif\n"
+              anchor = "#include <linux/security.h>\n"
+              if anchor not in text:
+                  raise SystemExit(f"无法定位 {path} 的 SUSFS statfs helper 声明插入点")
+              path.write_text(text.replace(anchor, anchor + block, 1))
+              print("已修复 android12-5.10 fs/statfs.c 缺少前置 SUSFS statfs helper 原型")
+
+          PY
             fi
+
+            python3 - <<'PY'
+          from pathlib import Path
+
+          susfs_path = Path("./fs/susfs.c")
+          if susfs_path.is_file():
+              susfs_text = susfs_path.read_text()
+              if "security_sb_statfs(" in susfs_text and "#include <linux/security.h>" not in susfs_text:
+                  anchor = "#include <linux/statfs.h>\n"
+                  if anchor not in susfs_text:
+                      raise SystemExit(f"无法定位 {susfs_path} 的 security.h 插入点")
+                  susfs_path.write_text(susfs_text.replace(anchor, anchor + "#include <linux/security.h>\n", 1))
+                  print("已修复 fs/susfs.c 缺少 security_sb_statfs 原型")
+          PY
 
             # Android 13 - 5.15 修复
             if [[ "$ABK_ANDROID_VERSION" == "android13" && "$ABK_KERNEL_VERSION" == "5.15" ]]; then
@@ -2325,7 +2518,7 @@ jobs:
                   fi
                 fi
                 apply_susfs_optional_patch "Android 13 - 5.15 fdinfo.c" "a13-5.15/fdinfo.c.patch"
-                fix_fdinfo_mask_decl
+                fix_fdinfo_declarations
                 apply_susfs_optional_patch "Android 13 - 5.15 open.c" "a13-5.15/open.c.patch"
                 if [[ "$ABK_OS_PATCH_LEVEL" != "2024-05" ]]; then
                   fix_task_mmu_show_pad
@@ -2393,7 +2586,7 @@ jobs:
               fi
 
               # 修复 6.12.58+: exec.c 头部上下文变化导致 SUSFS 补丁漏掉 susfs_def.h
-              if grep -q 'susfs_is_current_proc_umounted' ./fs/exec.c && ! grep -qF '#include <linux/susfs_def.h>' ./fs/exec.c; then
+              if grep -qE 'susfs_is_current_proc_(no_su|umounted)' ./fs/exec.c && ! grep -qF '#include <linux/susfs_def.h>' ./fs/exec.c; then
                 if grep -qF '#include <linux/dma-buf.h>' ./fs/exec.c; then
                   sed -i '/#include <linux\/dma-buf.h>/a #ifdef CONFIG_KSU_SUSFS\n#include <linux\/susfs_def.h>\n#endif' ./fs/exec.c
                 else
@@ -2670,8 +2863,8 @@ jobs:
         env:
           BASH_ENV: ${{ inputs.source_mode == 'custom_git' && format('{0}/.github/scripts/custom-source-feature-env.sh', github.workspace) || '' }}
           ABK_FEATURE_ID: ntsync
-          ABK_FEATURE_END: "true"
-          ABK_FEATURE_FAILURE_MESSAGE: "NTsync patch failed"
+          ABK_ANDROID_VERSION: ${{ inputs.android_version }}
+          ABK_KERNEL_VERSION: ${{ inputs.kernel_version }}
         working-directory: ${{ env.KERNEL_ROOT }}/common
         run: |
           set -euo pipefail
@@ -2693,12 +2886,119 @@ jobs:
           }
 
           echo "启用 NTsync 补丁"
-          echo "应用基础补丁: ntsync_base.patch..."
-          patch -p1 --forward < $KERNEL_PATCHES/common/ntsync/ntsync_base.patch || true
-          # 根据 Android 版本和 Kernel 版本应用对应的兼容性补丁
-          PATCH_FILE="$KERNEL_PATCHES/common/ntsync/ntsync_compat_${{ inputs.android_version }}-${{ inputs.kernel_version }}.patch"
-          echo "应用版本补丁: ntsync_compat_${{ inputs.android_version }}-${{ inputs.kernel_version }}.patch"
-          patch -p1 --forward < "$PATCH_FILE" || true
+          BASE_PATCH="$KERNEL_PATCHES/common/ntsync/ntsync_base.patch"
+          PATCH_FILE="$KERNEL_PATCHES/common/ntsync/ntsync_compat_${ABK_ANDROID_VERSION}-${ABK_KERNEL_VERSION}.patch"
+          NTSYNC_SOURCE="drivers/misc/ntsync.c"
+
+          apply_ntsync_patch() {
+            local patch_file="$1"
+            [ -f "$patch_file" ] || {
+              echo "::error::NTsync 补丁不存在: $patch_file"
+              exit 1
+            }
+            echo "检查并应用 NTsync 补丁: $(basename "$patch_file")"
+            if patch -p1 --forward --dry-run < "$patch_file" >/dev/null 2>&1; then
+              patch -p1 --forward < "$patch_file"
+            elif patch -p1 --reverse --dry-run < "$patch_file" >/dev/null 2>&1; then
+              echo "NTsync 补丁已应用: $(basename "$patch_file")"
+            else
+              echo "::error::NTsync 补丁既无法应用，也不是已应用状态: $patch_file"
+              patch -p1 --forward --dry-run < "$patch_file" || true
+              exit 1
+            fi
+          }
+
+          apply_android12_ntsync_compat() {
+            local patch_file="$1"
+            local filtered_patch
+            filtered_patch="$(mktemp)"
+            # Android 12 GKI lacks lockdep_assert_none_held_once(), so the
+            # upstream backport hunk never matches. Replace that hunk with the
+            # equivalent macros needed by ntsync and apply the remaining patch.
+            python3 - "$patch_file" "$filtered_patch" <<'PY'
+          from pathlib import Path
+          import sys
+
+          source = Path(sys.argv[1]).read_text()
+          start = source.find("@@ -305,25 +310,29")
+          end = source.find("@@ -394,8 +403,12", start)
+          if start < 0 or end < 0:
+              raise SystemExit("unexpected android12 NTsync compatibility patch layout")
+          source = source[:start] + source[end:]
+
+          lockdep = Path("kernel/locking/lockdep.c").read_text()
+          function_pos = lockdep.find("int __lock_is_held")
+          function_line = lockdep[:function_pos].count("\n") + 1 if function_pos >= 0 else 99999
+          if function_line < 5250:
+              lockdep_start = source.find("@@ -5308,13 +5309,13")
+              lockdep_end = source.find("@@ -5593,10 +5594,14", lockdep_start)
+              if lockdep_start < 0 or lockdep_end < 0:
+                  raise SystemExit("unexpected android12 NTsync lockdep.c patch layout")
+              source = source[:lockdep_start] + source[lockdep_end:]
+          Path(sys.argv[2]).write_text(source)
+          PY
+            apply_ntsync_patch "$filtered_patch"
+            rm -f "$filtered_patch"
+
+            python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path("include/linux/lockdep.h")
+          text = path.read_text()
+          if "#define lockdep_assert(cond)" not in text:
+              marker = "#define lockdep_depth(tsk)\t(debug_locks ? (tsk)->lockdep_depth : 0)\n"
+              if marker not in text:
+                  raise SystemExit(f"missing lockdep assertion anchor: {path}")
+              block = """
+
+          #define lockdep_assert(cond) \
+              do { WARN_ON(debug_locks && !(cond)); } while (0)
+
+          #define lockdep_assert_once(cond) \
+              do { WARN_ON_ONCE(debug_locks && !(cond)); } while (0)
+          """
+              path.write_text(text.replace(marker, marker + block, 1))
+
+          lockdep_path = Path("kernel/locking/lockdep.c")
+          lockdep = lockdep_path.read_text()
+          function_start = lockdep.find("int __lock_is_held(const struct lockdep_map *lock, int read)")
+          function_end = lockdep.find("static struct pin_cookie __lock_pin_lock", function_start)
+          if function_start >= 0 and function_end >= 0:
+              body = lockdep[function_start:function_end]
+              if "return LOCK_STATE_HELD;" not in body:
+                  body = body.replace("return 1;", "return LOCK_STATE_HELD;", 1)
+                  body = body.replace("return 0;", "return LOCK_STATE_NOT_HELD;")
+                  lockdep_path.write_text(lockdep[:function_start] + body + lockdep[function_end:])
+          PY
+            grep -qF '#define lockdep_assert(cond)' include/linux/lockdep.h || {
+              echo "::error::Android 12 NTsync lockdep_assert 兼容修复失败"
+              exit 1
+            }
+          }
+
+          # Android 16/6.12 已带原生 ntsync.c 与 UAPI；基础补丁是新增文件式补丁，
+          # 对原生源码既不能正向应用，也不能用反向 dry-run 判定为已应用。
+          if [[ "$ABK_ANDROID_VERSION" != "android16" || "$ABK_KERNEL_VERSION" != "6.12" ]]; then
+            apply_ntsync_patch "$BASE_PATCH"
+          elif [ -f "$NTSYNC_SOURCE" ] && [ -f include/uapi/linux/ntsync.h ]; then
+            echo "NTsync 基础源码已由 android16-6.12 内核提供"
+          else
+            echo "::error::android16-6.12 内核缺少原生 NTsync 源码或 UAPI"
+            exit 1
+          fi
+          if [[ "$ABK_ANDROID_VERSION" == "android12" && "$ABK_KERNEL_VERSION" == "5.10" ]]; then
+            apply_android12_ntsync_compat "$PATCH_FILE"
+          else
+            apply_ntsync_patch "$PATCH_FILE"
+          fi
+
+          [ -f "$NTSYNC_SOURCE" ] || {
+            echo "::error::NTsync 补丁完成后未生成 $NTSYNC_SOURCE"
+            exit 1
+          }
+
+          # 强制内建可避免 Android 14/6.1 将 ntsync.ko modpost 为独立模块；
+          # __vfs_setxattr_noperm 在该内核树中存在但未导出，内建对象可合法引用。
           ensure_defconfig_value CONFIG_NTSYNC y
           echo "应用 NTsync 补丁完成"
 
@@ -4509,6 +4809,9 @@ jobs:
                                                void *envp_user, int *__never_use_flags);
               int ksu_handle_execveat(int *fd, struct filename **filename_ptr, void *argv,
                                       void *envp, int *flags);
+              int ksu_handle_post_execveat_sucompat(int *fd, struct filename **filename_ptr,
+                                                     void *argv_user, void *envp_user,
+                                                     int *flags, int *retval);
               long ksu_handle_execve_sucompat(const char __user **filename_user, int orig_nr, const struct pt_regs *regs);
 
               #endif
@@ -4536,6 +4839,7 @@ jobs:
               text = ensure_include(text, '#include "objsec.h"', '#include "selinux/selinux.h"\n')
               text = ensure_include(text, '#include "feature/adb_root.h"', '#include "feature/sucompat.h"\n')
               text = ensure_include(text, '#include "uapi/sulog.h"', '#include "sulog/event.h"\n')
+              text = ensure_include(text, '#include "supercall/supercall.h"', '#include "feature/adb_root.h"\n')
               text = text.replace('#include "ksu.h"\n', "")
               text = text.replace('#include "util.h"\n', "")
 
@@ -4714,6 +5018,17 @@ jobs:
                   ksu_sulog_emit_pending(pending_sucompat, ret, GFP_KERNEL);
                   return 0;
               }
+
+              #ifdef CONFIG_KSU_SUSFS
+              int ksu_handle_post_execveat_sucompat(int *fd, struct filename **filename_ptr,
+                                                     void *argv_user, void *envp_user,
+                                                     int *flags, int *retval)
+              {
+                  if (*retval >= 0)
+                      (void)ksu_install_su_fd();
+                  return 0;
+              }
+              #endif
 
               int ksu_handle_execveat(int *fd, struct filename **filename_ptr, void *argv,
                                       void *envp, int *flags)
@@ -5571,6 +5886,37 @@ jobs:
 
               return changed
 
+          def ensure_post_execveat_wrapper(path):
+              text = path.read_text()
+              if "int ksu_handle_post_execveat_sucompat(" in text:
+                  return False
+              marker = "\n// sucompat: permitted process can execute 'su' to gain root access."
+              if marker not in text:
+                  return False
+              if '#include "supercall/supercall.h"' not in text:
+                  include_anchor = '#include "ksu.h" // IWYU pragma: keep\n'
+                  if include_anchor not in text:
+                      include_anchor = '#include "ksu.h"\n'
+                  if include_anchor not in text:
+                      raise SystemExit(f"无法定位 {path} 的 supercall.h include 插入点")
+                  text = text.replace(include_anchor, include_anchor + '#include "supercall/supercall.h"\n', 1)
+              block = """
+
+          #ifdef CONFIG_KSU_SUSFS
+          int ksu_handle_post_execveat_sucompat(int *fd, struct filename **filename_ptr,
+                                                void *argv_user, void *envp_user,
+                                                int *flags, int *retval)
+          {
+              if (*retval >= 0)
+                  (void)ksu_install_su_fd();
+              return 0;
+          }
+          #endif
+          """
+              path.write_text(text.replace(marker, block + marker, 1))
+              print(f"  已补齐 {path} 的 SUSFS post-exec su-session fd wrapper")
+              return True
+
           candidates = []
           for base in (Path("common/drivers/kernelsu"), Path("drivers/kernelsu"), Path("KernelSU/kernel")):
               if base.exists() and base not in candidates:
@@ -5587,6 +5933,8 @@ jobs:
               sucompat_c = kernel_dir / "feature/sucompat.c"
               if sucompat_c.exists():
                   changed = repair_sucompat(sucompat_c) or changed
+                  if Path("common/fs/exec.c").is_file() and "ksu_handle_post_execveat_sucompat(" in Path("common/fs/exec.c").read_text():
+                      changed = ensure_post_execveat_wrapper(sucompat_c) or changed
 
               sulog_event_c = kernel_dir / "sulog/event.c"
               if sulog_event_c.exists():

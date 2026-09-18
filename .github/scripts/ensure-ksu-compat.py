@@ -12,18 +12,24 @@ def locate(root: Path) -> Path:
 
 
 def ensure_su_fd(ksu: Path) -> bool:
-    source = ksu / "supercall.c"
-    header = ksu / "supercall.h"
+    source = next((path for path in (ksu / "supercall.c", ksu / "supercall/supercall.c") if path.is_file()), None)
+    if source is None:
+        return False
+    header = source.with_suffix(".h")
+
     changed = False
-    if source.is_file():
-        text = source.read_text()
-        if "int ksu_install_su_fd(void)" not in text:
-            marker = "\nvoid __init ksu_supercalls_init(void)"
-            if marker not in text:
-                raise SystemExit(f"missing supercall init anchor: {source}")
-            compat = "\n/* ABK: SUSFS fs/exec.c expects the su-session fd entry point. */\nint ksu_install_su_fd(void)\n{\n    return ksu_install_fd();\n}\n"
-            source.write_text(text.replace(marker, compat + marker, 1))
-            changed = True
+    text = source.read_text()
+    if "int ksu_install_su_fd(void)" not in text:
+        marker = "\nvoid __init ksu_supercalls_init(void)"
+        if marker not in text:
+            raise SystemExit(f"missing supercall init anchor: {source}")
+        if "ksu_install_fd_with_permissions(" in text:
+            compat = "\nint ksu_install_su_fd(void)\n{\n    /* Install the scoped descriptor after exec enters ksud. */\n    return ksu_install_fd_with_permissions(O_CLOEXEC, KSU_DRIVER_PERMISSION_SU_SESSION);\n}\n"
+        else:
+            compat = "\n/* ABK: legacy SukiSU has no scoped driver contexts yet. */\nint ksu_install_su_fd(void)\n{\n    return ksu_install_fd();\n}\n"
+        source.write_text(text.replace(marker, compat + marker, 1))
+        changed = True
+
     if header.is_file():
         text = header.read_text()
         if "int ksu_install_su_fd(void);" not in text:
@@ -58,7 +64,9 @@ static int kernel_umount_feature_set(u64 value)
 
 def main(root: str) -> None:
     ksu = locate(Path(root).resolve())
-    changed = ensure_su_fd(ksu) or ensure_umount_set(ksu)
+    changed_su_fd = ensure_su_fd(ksu)
+    changed_umount_set = ensure_umount_set(ksu)
+    changed = changed_su_fd or changed_umount_set
     print(f"KSU compatibility {'updated' if changed else 'already satisfied'}: {ksu}")
 
 
