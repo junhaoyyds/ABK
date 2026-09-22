@@ -162,9 +162,14 @@ KSU_BRANCH="${KSU_BRANCH:?KSU_BRANCH is required}"
 CUSTOM_REF="${CUSTOM_REF:-}"
 GITHUB_TOKEN="${GITHUB_TOKEN:-}"
 
-OFFICIAL_STABLE_REF="e6832ed548ada2fa16fcbd6c8e98bbd1868f4401"
-SUKISU_STABLE_REF="278d822a4ebd214bcfd774b7910cb11cdc560bb9"
-RESUKISU_STABLE_REF="2206a7dd71e600f34378c4c583244f46e7a35670"
+# Pin stable builds to the latest usable commit on each manager's main branch
+# (managers publish no dedicated "stable" branch). Refresh monthly: pick the newest
+# commit that has a successful build-manager run AND whose kernel source still matches
+# the CI patch layout (see build.yml). Bumped 2026-09 — verify with a Stable dispatch
+# when refreshing, since the manager APK is fetched from that commit's build-manager run.
+OFFICIAL_STABLE_REF="85cab5f841b55bed180c10dfdbe33f876aba7820"
+SUKISU_STABLE_REF="7755cdb36f63945f286d7b1cab662b42b18f2789"
+RESUKISU_STABLE_REF="6d18926ae6eeb571a04c1ce7552c324d606fa9d8"
 
 # Pin development builds to commits with a successful build-manager run on main.
 OFFICIAL_DEV_REF="33d0c9205df47b6b1b61c25c13afa164b88871d1"
