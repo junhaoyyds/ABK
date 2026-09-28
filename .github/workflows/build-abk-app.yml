@@ -64,6 +64,8 @@ jobs:
 
       - name: Set up Android SDK
         uses: android-actions/setup-android@v3
+        with:
+          packages: platform-tools
 
       - name: Install Android SDK packages
         run: sdkmanager --channel=3 "platforms;android-37.0" "build-tools;37.0.0" "cmake;3.22.1" "ndk;28.2.13676358"
@@ -550,7 +552,7 @@ jobs:
           "$ANDROID_HOME/build-tools/37.0.0/apksigner" verify --verbose "$signed_apk"
 
       - name: Prepare version metadata
-        if: ${{ github.repository == 'xingguangcuican6666/ABK' && github.event_name != 'pull_request' && startsWith(github.ref, 'refs/heads/') }}
+        if: ${{ github.repository == 'xingguangcuican6666/ABK' && github.event_name != 'pull_request' && github.ref_name == 'dev' }}
         id: version
         run: |
           set -euo pipefail
@@ -576,8 +578,8 @@ jobs:
         uses: peter-evans/create-pull-request@v7
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
-          commit-message: "chore(app): update unstable version metadata"
-          title: "chore(app): update unstable version metadata"
+          commit-message: "chore(app): update unstable metadata (normal)"
+          title: "chore(app): update unstable metadata (normal)"
           body: |
             Automated update of unstable version metadata.
 
@@ -589,8 +591,8 @@ jobs:
             Run ID: ${{ github.run_id }}
             Commit: ${{ github.sha }}
 
-          branch: bot/update-version-json
-          base: ${{ github.ref_name }}
+          branch: bot/version-json-normal
+          base: dev
           delete-branch: true
 
           add-paths: |

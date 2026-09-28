@@ -57,6 +57,8 @@ jobs:
       - name: Set up Android SDK
         if: ${{ matrix.language == 'java-kotlin' || matrix.language == 'c-cpp' }}
         uses: android-actions/setup-android@v3
+        with:
+          packages: platform-tools
 
       - name: Install Android SDK packages
         if: ${{ matrix.language == 'java-kotlin' || matrix.language == 'c-cpp' }}

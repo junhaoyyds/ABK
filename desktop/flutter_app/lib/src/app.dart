@@ -31,9 +31,12 @@ class AbkDesktopApp extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final themeAsync = ref.watch(desktopThemeProvider);
-    final theme =
-        themeAsync.valueOrNull ??
-        AppTheme.light(seedColor: AppTheme.fallbackSeedColor);
+    final themeMode = ref.watch(themeModeProvider);
+    final themeSet = themeAsync.valueOrNull;
+    final lightTheme =
+        themeSet?.light ?? AppTheme.light(seedColor: AppTheme.fallbackSeedColor);
+    final darkTheme =
+        themeSet?.dark ?? AppTheme.dark(seedColor: AppTheme.fallbackSeedColor);
 
     if (launchMode == AppLaunchMode.taskWindow) {
       return MaterialApp(
@@ -47,7 +50,9 @@ class AbkDesktopApp extends ConsumerWidget {
           GlobalWidgetsLocalizations.delegate,
           GlobalCupertinoLocalizations.delegate,
         ],
-        theme: theme,
+        theme: lightTheme,
+        darkTheme: darkTheme,
+        themeMode: themeMode,
         builder: (context, child) {
           return DesktopWindowFrame(child: child ?? const SizedBox.shrink());
         },
@@ -107,7 +112,9 @@ class AbkDesktopApp extends ConsumerWidget {
         GlobalWidgetsLocalizations.delegate,
         GlobalCupertinoLocalizations.delegate,
       ],
-      theme: theme,
+      theme: lightTheme,
+      darkTheme: darkTheme,
+      themeMode: themeMode,
       builder: (context, child) {
         return DesktopWindowFrame(child: child ?? const SizedBox.shrink());
       },

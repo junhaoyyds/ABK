@@ -854,6 +854,21 @@ object RootUtils {
         flags = ROOT_PROFILE_FLAG_NO_NEW_PRIVS
     )
 
+    // Read-only kernel status helpers (safe wrappers over the native bridge;
+    // return null/false if the driver is unavailable so callers never crash).
+    fun kernelHookType(): String? = runCatching {
+        AbkKsuNative.getHookType().takeIf { it.isNotBlank() }
+    }.getOrNull()
+
+    fun isKernelSafeMode(): Boolean = runCatching { AbkKsuNative.isSafeMode() }.getOrDefault(false)
+
+    fun isKernelLkmMode(): Boolean = runCatching { AbkKsuNative.isLkmMode() }.getOrDefault(false)
+
+    fun isKernelLateLoadMode(): Boolean =
+        runCatching { AbkKsuNative.isLateLoadMode() }.getOrDefault(false)
+
+    fun superuserCount(): Int? = runCatching { AbkKsuNative.getSuperuserCount() }.getOrNull()
+
     fun readKsuFeature(featureName: String): KsuFeatureState {
         val feature = normalizeKsuFeatureName(featureName)
             ?: return KsuFeatureState(featureName, KsuFeatureSupport.UNSUPPORTED)

@@ -942,6 +942,14 @@ class AppStrings {
   String get settingsSaveDirectory => isChinese ? '保存目录' : 'Save directory';
   String get settingsDirectorySaved =>
       isChinese ? '默认下载目录已保存。' : 'The default download directory was saved.';
+  String get settingsAppearanceTitle => isChinese ? '外观' : 'Appearance';
+  String get settingsAppearanceSubtitle => isChinese
+      ? '基于 Material 3 Expressive，主题色取自桌面壁纸。选择跟随系统或手动切换深浅色。'
+      : 'Built on Material 3 Expressive with a wallpaper-seeded palette. Follow the system or switch light/dark manually.';
+  String get settingsThemeMode => isChinese ? '主题模式' : 'Theme mode';
+  String get settingsThemeModeSystem => isChinese ? '跟随系统' : 'System';
+  String get settingsThemeModeLight => isChinese ? '浅色' : 'Light';
+  String get settingsThemeModeDark => isChinese ? '深色' : 'Dark';
   String get settingsProxyTitle => isChinese ? '代理' : 'Proxy';
   String get settingsProxySubtitle => isChinese
       ? '为 GitHub、上游源码同步和其他桌面侧网络请求配置代理。'
@@ -1090,6 +1098,11 @@ class AppStrings {
       'kernel_umount' => deviceKernelFeatureKernelUmountTitle,
       'selinux_hide' => deviceKernelFeatureSelinuxHideTitle,
       'default_umount' => deviceKernelFeatureDefaultUmountTitle,
+      'hook_type' => isChinese ? '内核 Hook 方式' : 'Kernel hook',
+      'safe_mode' => isChinese ? '安全模式' : 'Safe mode',
+      'lkm_mode' => isChinese ? 'LKM 模式' : 'LKM mode',
+      'superuser_count' => isChinese ? '超级用户数量' : 'Superuser count',
+      'kpm' => isChinese ? 'KPM 支持' : 'KPM support',
       _ => id,
     };
   }
@@ -1101,6 +1114,21 @@ class AppStrings {
       'kernel_umount' => deviceKernelFeatureKernelUmountSubtitle,
       'selinux_hide' => deviceKernelFeatureSelinuxHideSubtitle,
       'default_umount' => deviceKernelFeatureDefaultUmountSubtitle,
+      'hook_type' => isChinese
+          ? 'KernelSU 的挂钩实现方式（只读）。'
+          : 'How KernelSU hooks syscalls (read-only).',
+      'safe_mode' => isChinese
+          ? '内核是否处于安全模式（只读）。'
+          : 'Whether the kernel is in safe mode (read-only).',
+      'lkm_mode' => isChinese
+          ? '是否以可加载内核模块方式运行（只读）。'
+          : 'Whether running as a loadable kernel module (read-only).',
+      'superuser_count' => isChinese
+          ? '当前已授权 Root 的应用数量（只读）。'
+          : 'Number of apps currently granted root (read-only).',
+      'kpm' => isChinese
+          ? '内核是否支持 KPM（内核补丁模块，只读）。'
+          : 'Whether the kernel supports KPM patch modules (read-only).',
       _ => '',
     };
   }
@@ -1112,6 +1140,9 @@ class AppStrings {
       _ => deviceKernelFeatureStatusUnsupported,
     };
   }
+
+  String deviceKernelFeatureStateLabel(bool on) =>
+      on ? (isChinese ? '已开启' : 'On') : (isChinese ? '已关闭' : 'Off');
 
   static AppStrings fromLocale(Locale locale) {
     if (locale.languageCode.toLowerCase().startsWith('zh')) {

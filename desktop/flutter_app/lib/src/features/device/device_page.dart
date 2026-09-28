@@ -1386,21 +1386,22 @@ class _KernelTab extends StatelessWidget {
                     spacing: 10,
                     runSpacing: 10,
                     children: <Widget>[
-                      ...kernelFeatures!.items
-                          .take(4)
-                          .map(
-                            (feature) => StatusPill(
-                              label: strings.deviceKernelFeatureTitle(
-                                feature.id,
-                              ),
-                              color: feature.checked
-                                  ? Theme.of(context).colorScheme.primary
-                                  : Theme.of(context).colorScheme.outline,
-                              icon: feature.checked
-                                  ? Icons.toggle_on_rounded
-                                  : Icons.toggle_off_rounded,
-                            ),
-                          ),
+                      ...kernelFeatures!.items.map(
+                        (feature) => _KernelStateChip(
+                          label: strings.deviceKernelFeatureTitle(feature.id),
+                          on: feature.checked,
+                          stateLabel:
+                              (feature.detail != null &&
+                                  feature.detail!.isNotEmpty)
+                              ? feature.detail!
+                              : strings.deviceKernelFeatureStateLabel(
+                                  feature.checked,
+                                ),
+                          neutral:
+                              feature.detail != null &&
+                              feature.detail!.isNotEmpty,
+                        ),
+                      ),
                     ],
                   ),
                 ] else if (state.kernelFeatureError != null) ...<Widget>[
@@ -2776,7 +2777,9 @@ class _KernelFeatureTile extends StatelessWidget {
             ),
           ),
           const SizedBox(width: 12),
-          if (busy)
+          if (feature.readOnly)
+            _KernelReadOnlyValue(feature: feature)
+          else if (busy)
             const SizedBox(
               width: 22,
               height: 22,
@@ -2787,6 +2790,108 @@ class _KernelFeatureTile extends StatelessWidget {
               value: feature.checked,
               onChanged: feature.enabled ? onChanged : null,
             ),
+        ],
+      ),
+    );
+  }
+}
+
+/// Trailing widget for a read-only kernel status row: shows the `detail` string
+/// (e.g. hook type) when present, otherwise an On/Off state — never a switch.
+class _KernelReadOnlyValue extends StatelessWidget {
+  const _KernelReadOnlyValue({required this.feature});
+
+  final KernelFeatureItem feature;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final textTheme = Theme.of(context).textTheme;
+    final hasDetail = feature.detail != null && feature.detail!.isNotEmpty;
+    final accent = hasDetail
+        ? scheme.secondary
+        : (feature.checked ? scheme.primary : scheme.onSurfaceVariant);
+    final label = hasDetail
+        ? feature.detail!
+        : context.strings.deviceKernelFeatureStateLabel(feature.checked);
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+      decoration: BoxDecoration(
+        color: accent.withValues(alpha: 0.14),
+        borderRadius: BorderRadius.circular(999),
+      ),
+      child: Text(
+        label,
+        style: textTheme.labelLarge?.copyWith(
+          color: accent,
+          fontWeight: FontWeight.w700,
+        ),
+      ),
+    );
+  }
+}
+
+/// Read-only status chip for the kernel-feature summary. Deliberately not a
+/// switch — the real toggles live on the kernel features page. It reads as
+/// "name + state" so it can't be mistaken for an interactive control.
+class _KernelStateChip extends StatelessWidget {
+  const _KernelStateChip({
+    required this.label,
+    required this.on,
+    required this.stateLabel,
+    this.neutral = false,
+  });
+
+  final String label;
+  final bool on;
+  final String stateLabel;
+
+  /// When true the chip shows an informational value (e.g. hook type) rather
+  /// than an on/off state, so it uses a neutral accent and dot.
+  final bool neutral;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final textTheme = Theme.of(context).textTheme;
+    final accent = neutral
+        ? scheme.secondary
+        : (on ? scheme.primary : scheme.onSurfaceVariant);
+    return Container(
+      padding: const EdgeInsets.fromLTRB(12, 8, 10, 8),
+      decoration: BoxDecoration(
+        color: (on ? scheme.primaryContainer : scheme.surfaceContainerHighest)
+            .withValues(alpha: on ? 0.55 : 0.4),
+        borderRadius: BorderRadius.circular(999),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: <Widget>[
+          Icon(
+            (neutral || on) ? Icons.circle : Icons.circle_outlined,
+            size: 9,
+            color: accent,
+          ),
+          const SizedBox(width: 8),
+          Text(
+            label,
+            style: textTheme.labelLarge?.copyWith(color: scheme.onSurface),
+          ),
+          const SizedBox(width: 8),
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+            decoration: BoxDecoration(
+              color: accent.withValues(alpha: 0.16),
+              borderRadius: BorderRadius.circular(999),
+            ),
+            child: Text(
+              stateLabel,
+              style: textTheme.labelSmall?.copyWith(
+                color: accent,
+                fontWeight: FontWeight.w700,
+              ),
+            ),
+          ),
         ],
       ),
     );

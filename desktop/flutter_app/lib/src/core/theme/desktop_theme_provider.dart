@@ -11,11 +11,29 @@ final desktopWallpaperApiProvider = Provider<DesktopWallpaperApi>((ref) {
   return MethodChannelDesktopWallpaperApi();
 });
 
-final desktopThemeProvider = FutureProvider<ThemeData>((ref) async {
+/// Light + dark Material 3 Expressive themes derived from a single seed color.
+class DesktopThemeSet {
+  const DesktopThemeSet({required this.light, required this.dark});
+
+  final ThemeData light;
+  final ThemeData dark;
+
+  factory DesktopThemeSet.fromSeed(Color seed) => DesktopThemeSet(
+    light: AppTheme.light(seedColor: seed),
+    dark: AppTheme.dark(seedColor: seed),
+  );
+}
+
+/// User-selected theme mode. Defaults to following the OS setting.
+final themeModeProvider = StateProvider<ThemeMode>((ref) => ThemeMode.system);
+
+/// Builds both theme variants from the current desktop wallpaper's dominant
+/// color so the app picks up the system accent.
+final desktopThemeProvider = FutureProvider<DesktopThemeSet>((ref) async {
   final wallpaperApi = ref.read(desktopWallpaperApiProvider);
   final wallpaperPath = await wallpaperApi.getWallpaperPath();
   final wallpaperSeed = await _resolveWallpaperSeed(wallpaperPath);
-  return AppTheme.light(seedColor: wallpaperSeed ?? AppTheme.fallbackSeedColor);
+  return DesktopThemeSet.fromSeed(wallpaperSeed ?? AppTheme.fallbackSeedColor);
 });
 
 Future<Color?> _resolveWallpaperSeed(String? wallpaperPath) async {

@@ -89,6 +89,10 @@ internal data class AbkAgentKernelFeatureItem(
     @SerializedName("checked") val checked: Boolean,
     @SerializedName("enabled") val enabled: Boolean,
     @SerializedName("status") val status: String,
+    // Optional read-only informational value (e.g. hook type, superuser count).
+    // When readOnly is true the desktop renders a status row instead of a switch.
+    @SerializedName("detail") val detail: String? = null,
+    @SerializedName("readOnly") val readOnly: Boolean = false,
 )
 
 internal object AbkAgentFacade {
@@ -520,8 +524,34 @@ internal object AbkAgentFacade {
                 status = "supported",
             )
         }
+
+        // Read-only kernel status surfaced to the desktop (no writes; the desktop
+        // renders these as status rows, not switches).
+        RootUtils.kernelHookType()?.let {
+            items += readOnlyFeatureItem(id = "hook_type", detail = it)
+        }
+        items += readOnlyFeatureItem(id = "safe_mode", checked = RootUtils.isKernelSafeMode())
+        items += readOnlyFeatureItem(id = "lkm_mode", checked = RootUtils.isKernelLkmMode())
+        RootUtils.superuserCount()?.let {
+            items += readOnlyFeatureItem(id = "superuser_count", detail = it.toString())
+        }
+        items += readOnlyFeatureItem(id = "kpm", checked = RootUtils.isKpmAvailable())
+
         return items
     }
+
+    private fun readOnlyFeatureItem(
+        id: String,
+        checked: Boolean = false,
+        detail: String? = null,
+    ): AbkAgentKernelFeatureItem = AbkAgentKernelFeatureItem(
+        id = id,
+        checked = checked,
+        enabled = false,
+        status = "managed",
+        detail = detail,
+        readOnly = true,
+    )
 
     private inline fun featureItem(
         id: String,

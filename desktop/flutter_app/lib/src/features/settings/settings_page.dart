@@ -7,6 +7,7 @@ import '../../core/models/build_models.dart';
 import '../../core/localization/app_strings.dart';
 import '../../core/models/sidecar_models.dart';
 import '../../core/state/dashboard_controller.dart';
+import '../../core/theme/desktop_theme_provider.dart';
 import '../../widgets/panel_card.dart';
 import '../../widgets/status_pill.dart';
 import 'settings_page_controller.dart';
@@ -127,6 +128,8 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
             ),
           ],
           const SizedBox(height: 16),
+          const _SettingsAppearanceCard(),
+          const SizedBox(height: 16),
           _SettingsAccountCard(state: settingsState, controller: settings),
           const SizedBox(height: 16),
           _SettingsBuildCard(
@@ -165,6 +168,55 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
       text: value,
       selection: TextSelection.collapsed(offset: value.length),
       composing: TextRange.empty,
+    );
+  }
+}
+
+class _SettingsAppearanceCard extends ConsumerWidget {
+  const _SettingsAppearanceCard();
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final strings = context.strings;
+    final mode = ref.watch(themeModeProvider);
+    return PanelCard(
+      title: strings.settingsAppearanceTitle,
+      subtitle: strings.settingsAppearanceSubtitle,
+      icon: Icons.palette_rounded,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: <Widget>[
+          Text(
+            strings.settingsThemeMode,
+            style: Theme.of(context).textTheme.labelLarge,
+          ),
+          const SizedBox(height: 12),
+          SegmentedButton<ThemeMode>(
+            segments: <ButtonSegment<ThemeMode>>[
+              ButtonSegment<ThemeMode>(
+                value: ThemeMode.system,
+                icon: const Icon(Icons.brightness_auto_rounded),
+                label: Text(strings.settingsThemeModeSystem),
+              ),
+              ButtonSegment<ThemeMode>(
+                value: ThemeMode.light,
+                icon: const Icon(Icons.light_mode_rounded),
+                label: Text(strings.settingsThemeModeLight),
+              ),
+              ButtonSegment<ThemeMode>(
+                value: ThemeMode.dark,
+                icon: const Icon(Icons.dark_mode_rounded),
+                label: Text(strings.settingsThemeModeDark),
+              ),
+            ],
+            selected: <ThemeMode>{mode},
+            showSelectedIcon: false,
+            onSelectionChanged: (selection) {
+              ref.read(themeModeProvider.notifier).state = selection.first;
+            },
+          ),
+        ],
+      ),
     );
   }
 }

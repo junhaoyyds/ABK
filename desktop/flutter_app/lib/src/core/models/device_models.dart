@@ -463,6 +463,8 @@ class KernelFeatureItem {
     required this.checked,
     required this.enabled,
     required this.status,
+    this.detail,
+    this.readOnly = false,
   });
 
   final String id;
@@ -470,15 +472,24 @@ class KernelFeatureItem {
   final bool enabled;
   final String status;
 
+  /// Optional read-only informational value (e.g. hook type, superuser count).
+  final String? detail;
+
+  /// When true this is a status row, not a toggle.
+  final bool readOnly;
+
   bool get isSupported => status == 'supported' || status == 'managed';
   bool get isManaged => status == 'managed';
 
   factory KernelFeatureItem.fromJson(Map<String, dynamic> json) {
+    final detail = _readString(json['detail'], fallback: '');
     return KernelFeatureItem(
       id: _readString(json['id']),
       checked: json['checked'] == true,
       enabled: json['enabled'] == true,
       status: _readString(json['status'], fallback: 'unsupported'),
+      detail: detail.isEmpty ? null : detail,
+      readOnly: json['readOnly'] == true,
     );
   }
 }

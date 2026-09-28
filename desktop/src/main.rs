@@ -4380,6 +4380,18 @@ fn inject_module_webui_html_prelude(module_id: &str, html: &str, base_prefix: &s
     if !html.to_ascii_lowercase().contains("<base ") {
         prelude.push_str(&format!(r#"<base href="{base_prefix}">"#));
     }
+    // Many KernelSU module WebUIs (Vite builds) begin their CSS with an
+    // `@import "https://mui.kernelsu.org/internal/colors.css"`. That external
+    // cross-origin @import fails inside the desktop WebKitGTK view, which makes
+    // the stylesheet <link> fire `error` even though the module's own CSS
+    // parsed fine. Vite's `__vitePreload` then rejects the dynamic import of the
+    // root component and the app renders a blank page. Vite exposes a
+    // `vite:preloadError` event for exactly this — preventDefault() makes it
+    // ignore the failed preload and continue mounting. Must run before the
+    // module scripts, so it goes first in the injected prelude.
+    prelude.push_str(
+        r#"<script>window.addEventListener('vite:preloadError',function(e){e.preventDefault();});</script>"#,
+    );
     prelude.push_str(r#"<script>"#);
     prelude.push_str(&module_webui_bridge_script(module_id));
     prelude.push_str(r#"</script>"#);
