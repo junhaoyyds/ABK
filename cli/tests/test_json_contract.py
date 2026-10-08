@@ -894,7 +894,7 @@ class JsonContractTests(unittest.TestCase):
         client = ContractClient()
         argv = [
             "abk", "--json", "--repo", "alice/ABK", "build", "--matrix", "a14",
-            "--ksu", "ReSukiSU", "--no-kpm", "--force",
+            "--ksu", "BakaSU", "--no-kpm", "--force",
         ]
         with (
             mock.patch.object(abk, "get_token", return_value="test-token"),
@@ -916,7 +916,7 @@ class JsonContractTests(unittest.TestCase):
         client.get_run = mock.Mock(side_effect=RuntimeError("run not visible yet"))
         argv = [
             "abk", "--json", "--repo", "alice/ABK", "build", "--matrix", "a14",
-            "--ksu", "ReSukiSU", "--no-kpm", "--force",
+            "--ksu", "BakaSU", "--no-kpm", "--force",
         ]
         with (
             mock.patch.object(abk, "get_token", return_value="test-token"),

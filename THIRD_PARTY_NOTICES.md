@@ -26,7 +26,7 @@ This document records the open source projects, embedded code, generated binarie
 | KernelSU | <https://github.com/tiann/KernelSU> | GPL-3.0 |
 | KernelSU Next | <https://github.com/KernelSU-Next/KernelSU-Next> | GPL-3.0 |
 | SukiSU Ultra | <https://github.com/SukiSU-Ultra/SukiSU-Ultra> | GPL-3.0 |
-| ReSukiSU | <https://github.com/ReSukiSU/ReSukiSU> | GPL-3.0 |
+| BakaSU | <https://github.com/Baka-SU/BakaSU> | GPL-3.0 |
 | SUSFS | <https://gitlab.com/simonpunk/susfs4ksu> | GPL-2.0 |
 | ShirkNeko/susfs4ksu | <https://github.com/ShirkNeko/susfs4ksu> | GPL-2.0 |
 | SukiSU_patch | <https://github.com/ShirkNeko/SukiSU_patch> | GPL-2.0 |

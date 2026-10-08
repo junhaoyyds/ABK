@@ -1679,7 +1679,7 @@ fn local_build_env_updates(request: &BuildGkiRequest) -> HashMap<String, String>
         request
             .ksu_variant
             .clone()
-            .unwrap_or_else(|| "ReSukiSU".into())
+            .unwrap_or_else(|| "BakaSU".into())
             .trim()
             .to_string(),
     );
@@ -2006,7 +2006,7 @@ impl LocalBuildManager {
             build_request
                 .ksu_variant
                 .clone()
-                .unwrap_or_else(|| String::from("ReSukiSU")),
+                .unwrap_or_else(|| String::from("BakaSU")),
         );
         values.insert(
             "KSU_TRACK".into(),
@@ -2263,7 +2263,7 @@ fn source_instance_id(kernel_line_id: &str, branch_month: &str) -> String {
 fn default_build_request_for_source(source_instance: &LocalBuildSourceInstance) -> BuildGkiRequest {
     BuildGkiRequest {
         target: "custom".into(),
-        ksu_variant: Some("ReSukiSU".into()),
+        ksu_variant: Some("BakaSU".into()),
         ksu_branch: Some("Stable".into()),
         version: Some(String::new()),
         revision: Some(if source_instance.kernel_version == "5.10" {

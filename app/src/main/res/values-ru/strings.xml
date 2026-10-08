@@ -181,6 +181,7 @@
     <string name="build_no_root_scheme_desc">Не внедрять схему авторизации root. Ветка KSU, SUSFS и KPM будут автоматически отключены.</string>
     <string name="build_oneplus_no_root_scheme_desc">Сборка ядра OnePlus без root. SUSFS и KPM будут отключены автоматически.</string>
     <string name="build_oneplus_ksu_branch_desc">Сборки OnePlus используют ветку upstream по умолчанию для выбранного варианта KernelSU.</string>
+    <string name="build_ksu_variant_deprecated">Апстрим ReSukiSU переименован в BakaSU; эта сборка использует BakaSU.</string>
     <string name="build_ksu_none">None (без root)</string>
     <string name="build_standard">стабильная</string>
     <string name="build_development">разработка</string>
@@ -355,6 +356,8 @@
     <string name="build_external_module_default">Внешний модуль</string>
     <string name="build_stage_none">Этап не выбран</string>
     <string name="build_source_list">Источник %1$s</string>
+    <string name="build_source_patch_month_placeholder">2025-09 или lts</string>
+    <string name="build_source_patch_month_invalid">Месяц патча должен быть в формате YYYY-MM или lts</string>
     <string name="build_section_kernel_desc">Выберите Android, KMI и дату патча безопасности для текущей системы; если не уверены, используйте рекомендацию устройства.</string>
     <string name="build_section_ksu_desc">Выберите схему прав ядра и соответствующую ветку.</string>
     <string name="build_section_features_desc">Включайте только нужные возможности — чем меньше изменений, тем проще отлаживать.</string>
@@ -418,7 +421,7 @@
     <string name="flash_chip_kernel_kind">Ядро: %1$s</string>
     <string name="flash_chip_susfs">SUSFS</string>
     <string name="flash_chip_kernel_unknown">?</string>
-    <string name="flash_kernel_resukisu">ReSukiSU</string>
+    <string name="flash_kernel_bakasu">BakaSU</string>
     <string name="flash_kernel_sukisu">SukiSU</string>
     <string name="flash_kernel_official">Official</string>
     <string name="flash_kernel_none">None</string>
@@ -431,7 +434,7 @@
     <string name="flash_cancel_confirm_yes">Да, отменить</string>
     <string name="flash_build_elapsed">Время сборки %1$s</string>
     <string name="flash_filter_kernel">Ядро</string>
-    <string name="flash_filter_kernel_resukisu">ReSukiSU</string>
+    <string name="flash_filter_kernel_bakasu">BakaSU</string>
     <string name="flash_filter_kernel_sukisu">SukiSU</string>
     <string name="flash_filter_kernel_official">Official KernelSU</string>
     <string name="flash_filter_kernel_none">Без KSU</string>
@@ -737,7 +740,7 @@
     <string name="settings_group_system_tools_desc">Инструменты для SELinux и путей размонтирования модулей.</string>
     <string name="settings_group_allowlist_desc">Экспорт или импорт текущего списка авторизации root.</string>
     <string name="settings_group_tool_status_desc">Результат последней операции с инструментами.</string>
-    <string name="settings_group_local_templates_desc">Управление шаблонами, сохранёнными в хранилище профилей ReSukiSU.</string>
+    <string name="settings_group_local_templates_desc">Управление шаблонами, сохранёнными в хранилище профилей BakaSU.</string>
     <string name="settings_group_status_desc">Результат последней операции с шаблоном.</string>
     <string name="settings_group_edit_template_desc">Прямое редактирование JSON-шаблона App Profile.</string>
     <string name="settings_app_update">Обновление приложения</string>
@@ -998,7 +1001,7 @@
     <string name="settings_unknown">Неизвестно</string>
     <string name="settings_local_templates">Локальные шаблоны</string>
     <string name="settings_templates_loading">Чтение шаблонов</string>
-    <string name="settings_templates_loading_desc">Загрузка из хранилища профилей ReSukiSU</string>
+    <string name="settings_templates_loading_desc">Загрузка из хранилища профилей BakaSU</string>
     <string name="settings_templates_empty">Шаблонов нет</string>
     <string name="settings_templates_empty_desc">Сохранённые шаблоны появятся здесь</string>
     <string name="settings_template_editing">Редактирование</string>
@@ -1232,7 +1235,7 @@
     <string name="ru_no_embedded_ksud">Исполняемый встроенный в APK SukiSU-Ultra ksud не найден; без root можно только сгенерировать пропатченный образ после выбора boot.img.</string>
     <string name="ru_install_requires_root">Этот способ установки требует прав root.</string>
     <string name="ru_not_active">Не активно</string>
-    <string name="ru_only_generic_su">Обнаружен только обычный su shell — управляющий интерфейс KernelSU/ReSukiSU для runtime-управления ABK не найден.</string>
+    <string name="ru_only_generic_su">Обнаружен только обычный su shell — управляющий интерфейс KernelSU/BakaSU для runtime-управления ABK не найден.</string>
     <string name="ru_unknown_su_compat">Неизвестный режим совместимости su</string>
     <string name="ru_unknown_feature">Неизвестная функция</string>
     <string name="ru_invalid_template_name">Недопустимое имя шаблона</string>
@@ -1245,10 +1248,10 @@
     <string name="ru_hide_selinux_toggle_failed">Не удалось переключить «Скрывать изменения SELinux»: %1$d</string>
     <string name="ru_command_timeout">Истекло время выполнения команды</string>
     <string name="ru_manager_not_active">Менеджер не активен</string>
-    <string name="ru_no_manager_interface">Не обнаружен ни доступный интерфейс менеджера KernelSU/ReSukiSU, ни root shell.</string>
+    <string name="ru_no_manager_interface">Не обнаружен ни доступный интерфейс менеджера KernelSU/BakaSU, ни root shell.</string>
     <string name="ru_diag_compat_shell_only">Сейчас работа идёт только через слой совместимости ksud/root shell — ABK ещё не распознан ядром как нативный менеджер, политикой авторизации root управлять нельзя.</string>
-    <string name="ru_diag_generic_su_only">Доступен только обычный su shell — нативный интерфейс менеджера KernelSU/ReSukiSU не обнаружен.</string>
-    <string name="ru_diag_native_not_manager">Нативный интерфейс KernelSU/ReSukiSU доступен, но текущий APK ABK не распознан как менеджер. Убедитесь, что установлен официально подписанный APK com.abk.kernel, чья подпись соответствует ABK_MANAGER_CERT_SHA256, заданному при сборке ядра.</string>
+    <string name="ru_diag_generic_su_only">Доступен только обычный su shell — нативный интерфейс менеджера KernelSU/BakaSU не обнаружен.</string>
+    <string name="ru_diag_native_not_manager">Нативный интерфейс KernelSU/BakaSU доступен, но текущий APK ABK не распознан как менеджер. Убедитесь, что установлен официально подписанный APK com.abk.kernel, чья подпись соответствует ABK_MANAGER_CERT_SHA256, заданному при сборке ядра.</string>
     <string name="ru_diag_control_no_response">ABK control не отвечает — возможно, в ядре не включён CONFIG_ABK_CONTROL или у внешнего модуля ABK Control нет этапа before_build.</string>
     <string name="ru_log_invoke_libksud">[ABK] Вызов встроенной libksud.so через root shell</string>
     <string name="ru_log_ksud_path">[ABK] Путь к ksud: %1$s</string>

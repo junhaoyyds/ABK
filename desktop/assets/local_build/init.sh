@@ -466,7 +466,7 @@ export OS_PATCH_LEVEL="$template_patch_level"
 export REVISION="r1"
 
 # Build knobs
-export KSU_VARIANT="ReSukiSU"
+export KSU_VARIANT="BakaSU"
 export KSU_TRACK="Dev"
 export KSU_CUSTOM_REF=""
 

@@ -73,7 +73,7 @@ normalize_variant() {
         none) printf 'None\n' ;;
         official) printf 'Official\n' ;;
         sukisu) printf 'SukiSU\n' ;;
-        resukisu) printf 'ReSukiSU\n' ;;
+        bakasu) printf 'BakaSU\n' ;;
         *) log_error "unsupported KSU_VARIANT: $1" ;;
     esac
 }
@@ -281,12 +281,16 @@ resolve_ksu_ref() {
     track="$(normalize_track "$KSU_TRACK")"
 
     case "$variant:$track" in
-        Official:'Stable(标准)') printf '%s\n' '3f388ef137c78e1ca0c92c0ada3b8717cdcc4302' ;;
-        Official:'Dev(开发)') printf '%s\n' '290609c945728fc93d85735918793567588103c1' ;;
-        SukiSU:'Stable(标准)') printf '%s\n' 'c5af9eadac43b1f0b9751471be78e6eef681554b' ;;
-        SukiSU:'Dev(开发)') printf '%s\n' 'aac170bcb86ce45516b3e2c0e2b32b57004b8f73' ;;
-        ReSukiSU:'Stable(标准)') printf '%s\n' 'b6706363b95525acd4007da19edadb1d41b2ea27' ;;
-        ReSukiSU:'Dev(开发)') printf '%s\n' 'fb771414f249ab886c09f2cfcbbf91c4b4dab2d1' ;;
+        # 与 .github/scripts/resolve-ksu-ref.sh 的 Stable/Dev 层保持一致：同一 commit 在两处
+        # 独立维护，漂移会让本地构建与 CI 编出不同的内核管理器。
+        Official:'Stable(标准)') printf '%s\n' '08a3b087e49227c8a6731c5f1114998b5e25255b' ;;
+        Official:'Dev(开发)') printf '%s\n' '08a3b087e49227c8a6731c5f1114998b5e25255b' ;;
+        SukiSU:'Stable(标准)') printf '%s\n' 'cf87e3f4ddd3f6e5464d85acf56aaa6950e70841' ;;
+        SukiSU:'Dev(开发)') printf '%s\n' 'cf87e3f4ddd3f6e5464d85acf56aaa6950e70841' ;;
+        # Baka-SU/BakaSU 上游没有 dev 分支（只有 main 与若干 feature 分支），故 Stable 与 Dev
+        # 同钉 main HEAD 9dbce02e；旧 SHA b6706363/fb771414 在改名后的仓库里仍可达，可作回退。
+        BakaSU:'Stable(标准)') printf '%s\n' '9dbce02e511ea6b6305a238b84e456f6a92e1d0b' ;;
+        BakaSU:'Dev(开发)') printf '%s\n' '9dbce02e511ea6b6305a238b84e456f6a92e1d0b' ;;
         None:'Stable(标准)'|None:'Dev(开发)'|None:'Custom(自定义)') printf '%s\n' '' ;;
         *:'Custom(自定义)')
             [[ -n "$KSU_CUSTOM_REF" ]] || log_error "KSU_CUSTOM_REF must be set when KSU_TRACK=Custom(自定义)"
@@ -304,7 +308,7 @@ resolve_ksu_setup_url() {
     case "$variant" in
         Official) printf '%s\n' 'https://raw.githubusercontent.com/tiann/KernelSU/main/kernel/setup.sh' ;;
         SukiSU) printf '%s\n' 'https://raw.githubusercontent.com/SukiSU-Ultra/SukiSU-Ultra/main/kernel/setup.sh' ;;
-        ReSukiSU) printf '%s\n' 'https://raw.githubusercontent.com/ReSukiSU/ReSukiSU/main/kernel/setup.sh' ;;
+        BakaSU) printf '%s\n' 'https://raw.githubusercontent.com/Baka-SU/BakaSU/main/kernel/setup.sh' ;;
         None) printf '%s\n' '' ;;
         *) log_error "unsupported KSU_VARIANT: $variant" ;;
     esac
@@ -316,7 +320,7 @@ resolve_ksu_repo_url() {
     case "$variant" in
         Official) printf '%s\n' 'https://github.com/tiann/KernelSU.git' ;;
         SukiSU) printf '%s\n' 'https://github.com/SukiSU-Ultra/SukiSU-Ultra.git' ;;
-        ReSukiSU) printf '%s\n' 'https://github.com/ReSukiSU/ReSukiSU.git' ;;
+        BakaSU) printf '%s\n' 'https://github.com/Baka-SU/BakaSU.git' ;;
         None) printf '%s\n' '' ;;
         *) log_error "unsupported KSU_VARIANT: $variant" ;;
     esac
@@ -771,8 +775,8 @@ apply_unicode_bypass_fix() {
     )
 }
 
-apply_resukisu_susfs_pre_compat() {
-    [[ "$(normalize_variant "$KSU_VARIANT")" == "ReSukiSU" ]] || return 0
+apply_bakasu_susfs_pre_compat() {
+    [[ "$(normalize_variant "$KSU_VARIANT")" == "BakaSU" ]] || return 0
     bool_is_true "$ENABLE_SUSFS" || return 0
 
     (
@@ -795,7 +799,7 @@ for base in roots:
         seen.add(resolved)
 
 if not candidates:
-    raise SystemExit("未找到实际 ReSukiSU 源码目录，无法应用 SUSFS 兼容修复")
+    raise SystemExit("未找到实际 BakaSU 源码目录，无法应用 SUSFS 兼容修复")
 
 for kernel_dir in candidates:
     tree_text = "\n".join(
@@ -812,7 +816,7 @@ for kernel_dir in candidates:
             and "DEFINE_STATIC_KEY_TRUE(ksu_is_init_rc_hook_enabled);" not in tree_text
         ):
             block = (
-                "\n/* ABK: ReSukiSU builtin SUSFS expects these inline hook static keys. */\n"
+                "\n/* ABK: BakaSU builtin SUSFS expects these inline hook static keys. */\n"
                 "#ifdef CONFIG_KSU_SUSFS\n"
                 "DEFINE_STATIC_KEY_TRUE(ksu_is_init_rc_hook_enabled);\n"
                 "DEFINE_STATIC_KEY_TRUE(ksu_is_input_hook_enabled);\n"
@@ -997,7 +1001,7 @@ apply_susfs_patch_stack() {
         patch -p1 <"50_add_susfs_in_gki-${ANDROID_VERSION}-${KERNEL_VERSION}.patch" || true
     )
 
-    if [[ "$variant" == "SukiSU" || "$variant" == "ReSukiSU" ]]; then
+    if [[ "$variant" == "SukiSU" || "$variant" == "BakaSU" ]]; then
         [[ -f "$KERNEL_ROOT/common/fs/susfs.c" ]] && \
             sed -i 's/^static void susfs_run_sus_path_loop(/void susfs_run_sus_path_loop(/' "$KERNEL_ROOT/common/fs/susfs.c"
     fi
@@ -1037,10 +1041,10 @@ apply_susfs_patch_stack() {
     fi
 }
 
-finalize_sukisu_resukisu_susfs_compat() {
+finalize_sukisu_bakasu_susfs_compat() {
     local variant
     variant="$(normalize_variant "$KSU_VARIANT")"
-    [[ "$variant" == "SukiSU" || "$variant" == "ReSukiSU" ]] || return 0
+    [[ "$variant" == "SukiSU" || "$variant" == "BakaSU" ]] || return 0
 
     (
         cd "$KERNEL_ROOT"
@@ -1108,7 +1112,7 @@ prepare_profile() {
     apply_glibc_fix
     apply_supp_op
     inject_kernelsu
-    apply_resukisu_susfs_pre_compat
+    apply_bakasu_susfs_pre_compat
     apply_susfs_patch_stack
 
     cp "$DEFCONFIG" "$DEFCONFIG.orig"
@@ -1393,7 +1397,7 @@ configure_kernel_options() {
         ensure_defconfig_value CONFIG_TMPFS_POSIX_ACL y
     fi
 
-    if [[ "$variant" == "SukiSU" || "$variant" == "ReSukiSU" ]]; then
+    if [[ "$variant" == "SukiSU" || "$variant" == "BakaSU" ]]; then
         if bool_is_true "$USE_KPM"; then
             ensure_defconfig_value CONFIG_KPM y
         else
@@ -1564,7 +1568,7 @@ apply_kpm_patch() {
     bool_is_true "$USE_KPM" || return 0
 
     case "$(normalize_variant "$KSU_VARIANT")" in
-        SukiSU|ReSukiSU) ;;
+        SukiSU|BakaSU) ;;
         *) return 0 ;;
     esac
 
@@ -1725,7 +1729,7 @@ main() {
         prepare_profile
         finalize_profile
         run_custom_external_modules before_build
-        finalize_sukisu_resukisu_susfs_compat
+        finalize_sukisu_bakasu_susfs_compat
         store_profile_snapshot
     fi
 

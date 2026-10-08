@@ -39,7 +39,7 @@ The repository provides GitHub Actions kernel build workflows. The Android app h
 ## Scope
 
 - Android 12 / 13 / 14 / 15 / 16 GKI build workflows, plus OnePlus/Oplus device build workflows.
-- KernelSU Official, KernelSU Next, SukiSU, and ReSukiSU variants.
+- KernelSU Official, KernelSU Next, SukiSU, and BakaSU variants.
 - Optional SUSFS, ZRAM, BBG, KPM, Re-Kernel, lz4kd, BBR, proxy optimization, Unicode bypass, and OnePlus 8E support.
 - Artifact handling for AnyKernel3 packages, kernel images, KernelSU managers, and SUSFS modules.
 
@@ -63,7 +63,7 @@ You can also run the workflows manually from GitHub Actions.
 The app's Build tab can switch between `GKI` and `OnePlus` targets. Selecting `OnePlus` dispatches [`oneplus-custom.yml`](.github/workflows/oneplus-custom.yml), which syncs the selected CPU branch and device XML from the OnePlus/Oplus manifest.
 ABK no longer uses `_b/_v/_u/_t` as the user-facing selection rule; the app, workflow summaries, and matrix job names show the device, ColorOS/OxygenOS system line, Android KMI, and CPU directly, while the upstream XML name stays only as a repo-init parameter.
 
-OnePlus builds support `android12/5.10`, `android13/5.15`, `android14/6.1`, `android15/6.6`, and `android16/6.12`; OnePlus 15/15T use the `sm8850` `android16/6.12` manifests. KernelSU Official, SukiSU, ReSukiSU, and rootless builds are available. OnePlus-specific switches include SUSFS, KPM, lz4kd, BBG, BBR, proxy optimization, and the Unicode zero-width bypass fix. SUSFS applies to `android14/6.1`, `android15/6.6`, and `android16/6.12`; 6.12 automatically disables the incompatible legacy lz4kd patch, and MTK CPU branches force proxy optimization off.
+OnePlus builds support `android12/5.10`, `android13/5.15`, `android14/6.1`, `android15/6.6`, and `android16/6.12`; OnePlus 15/15T use the `sm8850` `android16/6.12` manifests. KernelSU Official, SukiSU, BakaSU, and rootless builds are available. OnePlus-specific switches include SUSFS, KPM, lz4kd, BBG, BBR, proxy optimization, and the Unicode zero-width bypass fix. SUSFS applies to `android14/6.1`, `android15/6.6`, and `android16/6.12`; 6.12 automatically disables the incompatible legacy lz4kd patch, and MTK CPU branches force proxy optimization off.
 
 To batch-build every currently supported OnePlus/Oplus device, manually run [`oneplus-full-feature-matrix.yml`](.github/workflows/oneplus-full-feature-matrix.yml) from GitHub Actions. The matrix reads the upstream manifest and generates jobs by CPU branch and KMI line.
 To trigger a full matrix across all manager variants for both GKI and OnePlus in one place, use [`all-managers-full-feature-matrix.yml`](.github/workflows/all-managers-full-feature-matrix.yml). Its inputs let you choose which variants to include, whether to run GKI or OnePlus, and the common build customizations.
@@ -95,7 +95,7 @@ Virtualization support enables the kernel features needed by Linux container env
 - Flashing kernels is high-risk and may cause boot failure, data loss, or require restoring a stock boot image.
 - Do not build or flash if you are unsure about the target partition, kernel version, Android version, or security patch level.
 - OnePlus ColorOS/OxygenOS 13 / 14 / 15 / 16 compatibility still needs device-side validation and may require data wiping in failure cases.
-- If a build fails, first check whether SukiSU / SUSFS / ReSukiSU upstream branches have recently changed and are temporarily out of sync.
+- If a build fails, first check whether SukiSU / SUSFS / BakaSU upstream branches have recently changed and are temporarily out of sync.
 - Custom external modules execute `setup.sh` from third-party repository roots. Review the script and source before enabling it.
 - ABK is intended only for devices and repositories you own or are explicitly authorized to use. Do not use it for unauthorized access, fraud, abuse, anti-risk bypassing, cheating, data theft, service disruption, or other illegal purposes.
 
@@ -122,7 +122,7 @@ Applies to every GKI `workflow_dispatch` workflow ([`kernel-custom.yml`](.github
 
 On GitHub Actions and the app GKI build screen, **Latest(最新)** sits between **Dev** and **Custom**. [`resolve-ksu-ref.sh`](.github/scripts/resolve-ksu-ref.sh) resolves upstream KernelSU sources at run time:
 
-- **Official / SukiSU / ReSukiSU (GKI):** prefer upstream `main` **HEAD** when that commit has a successful `release.yml` (tag release) or standalone `build-manager.yml` run; kernel and manager share that `head_sha`. Otherwise fall back to the latest successful standalone `build-manager` on `main`. Manager APK via [nightly.link](https://nightly.link/) (`manager.zip` or `Manager-release.zip`); download also checks `release.yml` runs. Latest fails if neither path has a usable green run on `main`.
+- **Official / SukiSU / BakaSU (GKI):** prefer upstream `main` **HEAD** when that commit has a successful `release.yml` (tag release) or standalone `build-manager.yml` run; kernel and manager share that `head_sha`. Otherwise fall back to the latest successful standalone `build-manager` on `main`. Manager APK via [nightly.link](https://nightly.link/) (`manager.zip` or `Manager-release.zip`); download also checks `release.yml` runs. Latest fails if neither path has a usable green run on `main`.
 
 If manager download fails, the manager job step fails but **the kernel build continues**. Latest does not fall back to `releases/latest` (the Stable/Dev release path).
 
@@ -187,7 +187,7 @@ Conditional variables:
 
 ABK Control manager recognition notes:
 
-- When using `ABK_control_module` to make ABK work directly as a KernelSU / SukiSU / ReSukiSU manager, configure both `after_patch` and `before_build`.
+- When using `ABK_control_module` to make ABK work directly as a KernelSU / SukiSU / BakaSU manager, configure both `after_patch` and `before_build`.
 - The ABK APK installed on the phone must match the `ABK_MANAGER_PACKAGE` and `ABK_MANAGER_CERT_SHA256` printed in the kernel build log. Default debug or locally ad-hoc signed APKs do not match the checked-in release certificate metadata.
 - The kernel build validates the ABK Control bridge markers and `CONFIG_ABK_CONTROL=y` before compiling. If it fails, first check for a missing `before_build` stage or certificate metadata that does not match the installed APK.
 
@@ -277,7 +277,7 @@ The full notice list is maintained in [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOT
 | KernelSU | <https://github.com/tiann/KernelSU> | GPL-3.0 |
 | KernelSU Next | <https://github.com/KernelSU-Next/KernelSU-Next> | GPL-3.0 |
 | SukiSU Ultra | <https://github.com/SukiSU-Ultra/SukiSU-Ultra> | GPL-3.0 |
-| ReSukiSU | <https://github.com/ReSukiSU/ReSukiSU> | GPL-3.0 |
+| BakaSU | <https://github.com/Baka-SU/BakaSU> | GPL-3.0 |
 | SUSFS | <https://gitlab.com/simonpunk/susfs4ksu> | GPL-2.0 |
 | ShirkNeko/susfs4ksu | <https://github.com/ShirkNeko/susfs4ksu> | GPL-2.0 |
 | SukiSU_patch | <https://github.com/ShirkNeko/SukiSU_patch> | GPL-2.0 |

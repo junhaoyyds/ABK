@@ -925,7 +925,7 @@ object RootUtils {
         }
     }
 
-    fun setReSukiSuFeatureEnabled(featureName: String, enabled: Boolean): ShellResult =
+    fun setBakaSuFeatureEnabled(featureName: String, enabled: Boolean): ShellResult =
         setKsuFeatureEnabled(featureName, enabled)
 
     fun isDefaultUmountModules(): Boolean {
@@ -1660,7 +1660,7 @@ object RootUtils {
     val ABK_LKM_VARIANTS = listOf(
         AbkLkmVariant("kernelsu", "KernelSU"),
         AbkLkmVariant("sukisu", "SukiSU"),
-        AbkLkmVariant("resukisu", "ReSukiSU")
+        AbkLkmVariant("bakasu", "BakaSU")
     )
 
     enum class KsuFeatureSupport {
@@ -2623,7 +2623,7 @@ object RootUtils {
     private fun inferManagerVariant(version: String): String {
         val lower = version.lowercase()
         return when {
-            "resukisu" in lower -> "ReSukiSU"
+            "bakasu" in lower -> "BakaSU"
             "sukisu" in lower -> "SukiSU"
             "kernelsu" in lower || version.isNotBlank() -> "KernelSU"
             else -> ""

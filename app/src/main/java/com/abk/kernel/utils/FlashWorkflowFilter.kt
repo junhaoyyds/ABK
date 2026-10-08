@@ -8,7 +8,7 @@ import com.abk.kernel.data.model.isManagerDevBuild
 import com.abk.kernel.data.model.isPureManagerBuild
 import com.abk.kernel.data.model.workflowNameIndicatesManagerDev
 
-enum class FlashFilterKernelKind { ResuKisu, SukiSu, Official, None }
+enum class FlashFilterKernelKind { BakaSu, SukiSu, Official, None }
 
 enum class FlashFilterManagerKind { Release, Dev }
 
@@ -77,7 +77,7 @@ object FlashWorkflowFilter {
         val v = raw.lowercase()
         if (v.isBlank()) return null
         return when {
-            "resuki" in v || "re-suki" in v || "resukisu" in v -> FlashFilterKernelKind.ResuKisu
+            "resuki" in v || "re-suki" in v || "bakasu" in v -> FlashFilterKernelKind.BakaSu
             "sukisu" in v -> FlashFilterKernelKind.SukiSu
             "kernelsu" in v || "official" in v -> FlashFilterKernelKind.Official
             else -> FlashFilterKernelKind.None
@@ -105,14 +105,14 @@ object FlashWorkflowFilter {
     }
 
     /**
-     * Kernel sub-filters (ReSukiSU / SukiSu / …) need a resolved [FlashFilterKernelKind].
+     * Kernel sub-filters (BakaSU / SukiSu / …) need a resolved [FlashFilterKernelKind].
      *
      * While a run is [FlashFilterWorkflowState.Running] and [kernelKind] is still null
      * (no log summary yet, or dispatch config not linked), we show it under any active
      * kind filter so the list does not go empty mid-build. Once [kernelKind] is known
      * (queue [KernelBuildConfig] or parsed summary), non-matching kinds are hidden even
      * if GitHub status is still in_progress — e.g. SukiSu build disappears when only
-     * ReSukiSU is selected. That flicker is intentional: strict filter beats hiding
+     * BakaSU is selected. That flicker is intentional: strict filter beats hiding
      * the active run entirely.
      */
     private fun matchesKernelKindFilter(

@@ -22,7 +22,7 @@ class KernelWorkflowRegressionTests(unittest.TestCase):
 
     def test_sukisu_setup_accepts_resolved_bare_sha(self):
         block = self._step_run_block("添加 KernelSU")
-        case = block.split('"SukiSU")', 1)[1].split('"ReSukiSU")', 1)[0]
+        case = block.split('"SukiSU")', 1)[1].split('"BakaSU")', 1)[0]
 
         self.assertIn('requested_ref="$BRANCH"', case)
         self.assertNotIn('${BRANCH#-s }', case)
@@ -31,9 +31,10 @@ class KernelWorkflowRegressionTests(unittest.TestCase):
 
     def test_development_refs_are_reachable_successful_main_builds(self):
         expected = {
-            "OFFICIAL_DEV_REF": "33d0c9205df47b6b1b61c25c13afa164b88871d1",
-            "SUKISU_DEV_REF": "9fbe8fe8ca90c62c259c5894bf96d02ac31209b9",
-            "RESUKISU_DEV_REF": "246d3e52e667cb72ce8f70c93b70d3b42b100b76",
+            "OFFICIAL_DEV_REF": "08a3b087e49227c8a6731c5f1114998b5e25255b",
+            "SUKISU_DEV_REF": "cf87e3f4ddd3f6e5464d85acf56aaa6950e70841",
+            # Baka-SU/BakaSU ships no dev branch, so Dev collapses onto the same main HEAD as Stable.
+            "BAKASU_DEV_REF": "9dbce02e511ea6b6305a238b84e456f6a92e1d0b",
         }
         for variable, sha in expected.items():
             with self.subTest(variable=variable):
@@ -51,7 +52,7 @@ class KernelWorkflowRegressionTests(unittest.TestCase):
     def test_susfs_compatibility_step_covers_sukisu_variants(self):
         step = self.workflow.split("- name: 确保 KernelSU SUSFS ABI 兼容", 1)[1].split("- name: 配置 SukiSU 管理器信息", 1)[0]
         self.assertIn(
-            "if: (inputs.ksu_variant == 'SukiSU' || inputs.ksu_variant == 'ReSukiSU') && inputs.enable_susfs",
+            "if: (inputs.ksu_variant == 'SukiSU' || inputs.ksu_variant == 'BakaSU') && inputs.enable_susfs",
             step,
         )
         self.assertIn("custom-source-feature-env.sh", step)
@@ -140,7 +141,7 @@ class KernelWorkflowRegressionTests(unittest.TestCase):
         self.assertIn('declarations.append("\\tstruct mount *mnt;\\n")', block)
 
     def test_sukisu_post_exec_wrapper_installs_su_session_fd(self):
-        block = self._step_run_block("最终修复 SukiSU/ReSukiSU 源码兼容")
+        block = self._step_run_block("最终修复 SukiSU/BakaSU 源码兼容")
         self.assertIn("ensure_post_execveat_wrapper", block)
         self.assertIn('#include "supercall/supercall.h"', block)
         self.assertIn("int ksu_handle_post_execveat_sucompat(", block)

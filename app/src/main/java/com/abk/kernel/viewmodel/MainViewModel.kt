@@ -4361,10 +4361,10 @@ class MainViewModel @JvmOverloads constructor(
                     ManagerSettingsLoad()
                 } else {
                     when {
-                    manager.isReSukiSu() -> ManagerSettingsLoad(
-                        backend = "resukisu",
-                        title = "ReSukiSU",
-                        items = buildReSukiSuSettings()
+                    manager.isBakaSu() -> ManagerSettingsLoad(
+                        backend = "bakasu",
+                        title = "BakaSU",
+                        items = buildBakaSuSettings()
                     )
                     manager.isSukiSu() -> ManagerSettingsLoad(
                         backend = "sukisu",
@@ -4438,7 +4438,7 @@ class MainViewModel @JvmOverloads constructor(
         )
     }
 
-    private fun buildReSukiSuSettings(): List<ManagerSettingItem> {
+    private fun buildBakaSuSettings(): List<ManagerSettingItem> {
         val suCompat = RootUtils.readKsuFeature("su_compat")
         val kernelUmount = RootUtils.readKsuFeature("kernel_umount")
         val kpmAvailable = RootUtils.isKpmAvailable()
@@ -4465,7 +4465,7 @@ class MainViewModel @JvmOverloads constructor(
                 ManagerSettingItem(
                     id = MANAGER_SETTING_SU_COMPAT,
                     title = text(R.string.vm_setting_su_compat_title),
-                    subtitle = featureSubtitle(suCompat, text(R.string.vm_setting_su_compat_desc), "ReSukiSU"),
+                    subtitle = featureSubtitle(suCompat, text(R.string.vm_setting_su_compat_desc), "BakaSU"),
                     kind = ManagerSettingKind.MODE,
                     selectedIndex = suCompatMode,
                     options = managerSuCompatOptions(),
@@ -4477,7 +4477,7 @@ class MainViewModel @JvmOverloads constructor(
                 ManagerSettingItem(
                     id = MANAGER_SETTING_KERNEL_UMOUNT,
                     title = text(R.string.vm_setting_kernel_umount_title),
-                    subtitle = featureSubtitle(kernelUmount, text(R.string.vm_setting_kernel_umount_desc), "ReSukiSU"),
+                    subtitle = featureSubtitle(kernelUmount, text(R.string.vm_setting_kernel_umount_desc), "BakaSU"),
                     checked = kernelUmount.value != 0L,
                     enabled = kernelUmount.support == RootUtils.KsuFeatureSupport.SUPPORTED,
                     status = kernelUmount.toManagerSettingStatus()
@@ -4498,7 +4498,7 @@ class MainViewModel @JvmOverloads constructor(
                     ManagerSettingItem(
                         id = MANAGER_SETTING_SELINUX_HIDE,
                         title = text(R.string.vm_setting_selinux_hide_title),
-                        subtitle = featureSubtitle(selinuxHide, text(R.string.vm_setting_selinux_hide_desc), "ReSukiSU"),
+                        subtitle = featureSubtitle(selinuxHide, text(R.string.vm_setting_selinux_hide_desc), "BakaSU"),
                         checked = selinuxHide.value != 0L,
                         enabled = true,
                         status = selinuxHide.toManagerSettingStatus()
@@ -4510,7 +4510,7 @@ class MainViewModel @JvmOverloads constructor(
                     ManagerSettingItem(
                         id = MANAGER_SETTING_ADB_ROOT,
                         title = "ADB Root",
-                        subtitle = featureSubtitle(adbRoot, text(R.string.vm_setting_adb_root_desc), "ReSukiSU"),
+                        subtitle = featureSubtitle(adbRoot, text(R.string.vm_setting_adb_root_desc), "BakaSU"),
                         checked = (adbRoot.configValue ?: adbRoot.value ?: 0L) != 0L,
                         enabled = adbRoot.support == RootUtils.KsuFeatureSupport.SUPPORTED,
                         status = adbRoot.toManagerSettingStatus()
@@ -4521,7 +4521,7 @@ class MainViewModel @JvmOverloads constructor(
                 ManagerSettingItem(
                     id = MANAGER_SETTING_SULOG,
                     title = text(R.string.vm_setting_sulog_title),
-                    subtitle = featureSubtitle(sulog, text(R.string.vm_setting_sulog_desc), "ReSukiSU"),
+                    subtitle = featureSubtitle(sulog, text(R.string.vm_setting_sulog_desc), "BakaSU"),
                     checked = sulog.value != 0L,
                     enabled = sulog.support == RootUtils.KsuFeatureSupport.SUPPORTED,
                     status = sulog.toManagerSettingStatus()
@@ -4706,14 +4706,14 @@ class MainViewModel @JvmOverloads constructor(
         }
     }
 
-    private fun RootUtils.ManagerRuntimeProbe.isReSukiSu(): Boolean {
+    private fun RootUtils.ManagerRuntimeProbe.isBakaSu(): Boolean {
         val text = listOf(displayName, variant, version).joinToString(" ").lowercase()
-        return "resukisu" in text
+        return "bakasu" in text
     }
 
     private fun RootUtils.ManagerRuntimeProbe.isSukiSu(): Boolean {
         val text = listOf(displayName, variant, version).joinToString(" ").lowercase()
-        return "sukisu" in text && "resukisu" !in text
+        return "sukisu" in text && "bakasu" !in text
     }
 
     private fun RootUtils.ManagerRuntimeProbe.isOfficialKernelSu(): Boolean {
@@ -6348,7 +6348,7 @@ private const val BUILD_PLAN_MAX_DEFCONFIGS = 128
 private const val OFFICIAL_BUILD_MODULE_CATALOG_ID = "official-abk-module-catalog"
 private const val OFFICIAL_BUILD_MODULE_CATALOG_URL = "https://github.com/xingguangcuican6666/ABK_repo"
 
-private val BUILD_PLAN_KSU_VARIANTS = listOf("Official", "SukiSU", "ReSukiSU", "None")
+private val BUILD_PLAN_KSU_VARIANTS = listOf("Official", "SukiSU", "BakaSU", "None")
 private val BUILD_PLAN_KSU_BRANCHES = KSU_BRANCH_BUILD_PLAN_OPTIONS
 private val BUILD_PLAN_VIRTUALIZATION_OPTIONS = listOf("off", "on", "678", "123", "345")
 private val BUILD_PLAN_MODULE_STAGES = listOf(
@@ -6758,7 +6758,7 @@ private fun List<CustomExternalModule>?.toWorkflowInput(): String = this.orEmpty
 private fun buildVersionOverridesJson(osPatchLevel: String, kernelVersionOverride: String): String =
     Gson().toJson(
         mapOf(
-            "os_patch_level" to osPatchLevel,
+            "os_patch_level" to osPatchLevel.trim().lowercase(),
             "kernel_version_override" to kernelVersionOverride,
         )
     )

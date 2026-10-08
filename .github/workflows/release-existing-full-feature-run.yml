@@ -20,7 +20,7 @@ on:
         description: "KernelSU 变体"
         required: false
         type: string
-        default: "ReSukiSU"
+        default: "BakaSU"
       release_title:
         description: "Release 标题（留空自动生成）"
         required: false

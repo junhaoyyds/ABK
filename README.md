@@ -39,7 +39,7 @@ ABK 的目标是把手动 fork、启用 Actions、填写 GKI 或 OnePlus/Oplus �
 ## 支持范围
 
 - Android 12 / 13 / 14 / 15 / 16 GKI 构建流程，以及 OnePlus/Oplus 机型构建流程。
-- KernelSU Official、KernelSU Next、SukiSU、ReSukiSU 构建分支。
+- KernelSU Official、KernelSU Next、SukiSU、BakaSU 构建分支。
 - SUSFS、ZRAM、BBG、KPM、Re-Kernel、lz4kd、BBR、代理优化、Unicode 绕过和一加 8E 支持等可选功能。
 - AnyKernel3 包、kernel img、KernelSU 管理器和 SUSFS 模块产物整理。
 
@@ -62,7 +62,7 @@ ABK 的目标是把手动 fork、启用 Actions、填写 GKI 或 OnePlus/Oplus �
 App 的“构建内核”页可在 `GKI` 和 `OnePlus` 两种目标间切换。选择 `OnePlus` 后，App 会派发 [`oneplus-custom.yml`](.github/workflows/oneplus-custom.yml)，并通过 OnePlus/Oplus manifest 拉取对应 CPU 分支和机型 XML。
 ABK 不再把 `_b/_v/_u/_t` 当作用户选择规则；App、工作流摘要和矩阵任务名会直接显示机型、ColorOS/OxygenOS 系统线、Android KMI 和 CPU，上游 XML 名称只保留为仓库初始化参数。
 
-OnePlus 构建支持 `android12/5.10`、`android13/5.15`、`android14/6.1`、`android15/6.6`、`android16/6.12`，其中 OnePlus 15/15T 使用 `sm8850` 的 `android16/6.12` manifest。可选 KernelSU Official、SukiSU、ReSukiSU 或无 Root 内核。OnePlus 专用开关包括 SUSFS、KPM、lz4kd、BBG、BBR、代理优化和 Unicode 零宽绕过修复；SUSFS 在 `android14/6.1`、`android15/6.6` 与 `android16/6.12` 生效，6.12 会自动关闭不兼容的 legacy lz4kd，MTK CPU 分支会强制关闭代理优化。
+OnePlus 构建支持 `android12/5.10`、`android13/5.15`、`android14/6.1`、`android15/6.6`、`android16/6.12`，其中 OnePlus 15/15T 使用 `sm8850` 的 `android16/6.12` manifest。可选 KernelSU Official、SukiSU、BakaSU 或无 Root 内核。OnePlus 专用开关包括 SUSFS、KPM、lz4kd、BBG、BBR、代理优化和 Unicode 零宽绕过修复；SUSFS 在 `android14/6.1`、`android15/6.6` 与 `android16/6.12` 生效，6.12 会自动关闭不兼容的 legacy lz4kd，MTK CPU 分支会强制关闭代理优化。
 
 需要批量构建当前支持的全部 OnePlus/Oplus 机型时，可在 GitHub Actions 手动触发 [`oneplus-full-feature-matrix.yml`](.github/workflows/oneplus-full-feature-matrix.yml)。矩阵会读取上游 manifest，按 CPU 分支和 KMI 线生成构建任务。
 如果要一次性触发 GKI 与 OnePlus 的全部管理器类型全矩阵编译，可使用 [`all-managers-full-feature-matrix.yml`](.github/workflows/all-managers-full-feature-matrix.yml)，并通过输入项控制是否包含某个变体、是否跑 GKI 或 OnePlus，以及常用构建自定义项。
@@ -94,7 +94,7 @@ OnePlus 构建支持 `android12/5.10`、`android13/5.15`、`android14/6.1`、`an
 - 刷写内核属于高风险操作，可能导致无法开机、数据损坏或需要恢复出厂 boot 镜像。
 - 不建议在不确定设备分区、内核版本、Android 版本和安全补丁级别时强行构建或刷写。
 - 一加 ColorOS/OxygenOS 13 / 14 / 15 / 16 等设备兼容性仍需自行验证，异常情况下可能需要清除数据。
-- 如果构建失败，优先检查 SukiSU / SUSFS / ReSukiSU 等上游分支是否刚更新且尚未互相适配。
+- 如果构建失败，优先检查 SukiSU / SUSFS / BakaSU 等上游分支是否刚更新且尚未互相适配。
 - 自定义外部模块会执行第三方仓库根目录的 `setup.sh`。启用前请审查脚本内容和来源可信度，避免执行未知或恶意代码。
 - ABK 仅面向合法授权设备和合法研究/自用场景。禁止用于灰黑产、未授权访问、绕过风控、作弊、窃取数据、破坏服务或其他违法违规用途。
 
@@ -121,7 +121,7 @@ sukisu=
 
 在 GitHub Actions 与 App 的 GKI 构建界面中，**Latest(最新)** 位于 **Dev** 与 **Custom** 之间，由 [`resolve-ksu-ref.sh`](.github/scripts/resolve-ksu-ref.sh) 在运行时解析上游 KernelSU 来源：
 
-- **Official / SukiSU / ReSukiSU（GKI）：** 优先使用上游 `main` 的 **HEAD**，当该提交存在成功的 `release.yml`（标签发布）或独立的 `build-manager.yml` 时，内核与管理器共用该 `head_sha`；否则回退到 `main` 上最近一次成功的独立 `build-manager`。管理器经 [nightly.link](https://nightly.link/) 拉取（`manager.zip` 或 `Manager-release.zip`）；下载时同样会查找 `release.yml` 的 run。若 `main` 上两者皆无可用 CI，Latest 解析失败。
+- **Official / SukiSU / BakaSU（GKI）：** 优先使用上游 `main` 的 **HEAD**，当该提交存在成功的 `release.yml`（标签发布）或独立的 `build-manager.yml` 时，内核与管理器共用该 `head_sha`；否则回退到 `main` 上最近一次成功的独立 `build-manager`。管理器经 [nightly.link](https://nightly.link/) 拉取（`manager.zip` 或 `Manager-release.zip`）；下载时同样会查找 `release.yml` 的 run。若 `main` 上两者皆无可用 CI，Latest 解析失败。
 
 若管理器下载失败，管理器 job 对应步骤会失败，但**内核构建仍会继续**。Latest 不会回退到 `releases/latest`（Stable/Dev 用的发布包路径）。
 
@@ -186,7 +186,7 @@ https://github.com/user/module-a;after_patch|https://github.com/user/module-b;be
 
 ABK Control 管理器识别说明：
 
-- 如果使用 `ABK_control_module` 让 ABK 直接作为 KernelSU / SukiSU / ReSukiSU 管理器，建议同时配置 `after_patch` 和 `before_build` 两个阶段。
+- 如果使用 `ABK_control_module` 让 ABK 直接作为 KernelSU / SukiSU / BakaSU 管理器，建议同时配置 `after_patch` 和 `before_build` 两个阶段。
 - 手机上安装的 ABK APK 必须与内核构建日志中打印的 `ABK_MANAGER_PACKAGE` 和 `ABK_MANAGER_CERT_SHA256` 一致。默认 debug / 本地临时签名 APK 不会匹配仓库内的正式签名证书。
 - 构建会在编译前校验 ABK Control 桥接标记和 `CONFIG_ABK_CONTROL=y`；失败时优先检查是否遗漏 `before_build` 阶段，或是否使用了与 APK 不一致的证书元数据。
 
@@ -276,7 +276,7 @@ App 编译工作流（`Build ABK App` / `Build ABK App (dev)`）通过仓库变�
 | KernelSU | <https://github.com/tiann/KernelSU> | GPL-3.0 |
 | KernelSU Next | <https://github.com/KernelSU-Next/KernelSU-Next> | GPL-3.0 |
 | SukiSU Ultra | <https://github.com/SukiSU-Ultra/SukiSU-Ultra> | GPL-3.0 |
-| ReSukiSU | <https://github.com/ReSukiSU/ReSukiSU> | GPL-3.0 |
+| BakaSU | <https://github.com/Baka-SU/BakaSU> | GPL-3.0 |
 | SUSFS | <https://gitlab.com/simonpunk/susfs4ksu> | GPL-2.0 |
 | ShirkNeko/susfs4ksu | <https://github.com/ShirkNeko/susfs4ksu> | GPL-2.0 |
 | SukiSU_patch | <https://github.com/ShirkNeko/SukiSU_patch> | GPL-2.0 |

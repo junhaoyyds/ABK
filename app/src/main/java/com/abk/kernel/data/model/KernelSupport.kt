@@ -1,5 +1,8 @@
 package com.abk.kernel.data.model
 
+import com.abk.kernel.tr
+import com.abk.kernel.R
+
 import java.net.URI
 import kotlin.math.abs
 
@@ -291,7 +294,7 @@ object KernelSupport {
             if (isOnePlus || ksuVariant == KSU_VARIANT_NONE) KSU_BRANCH_STABLE else config.kernelsuBranch
         )
         val onePlusIsMtk = onePlusCpu.startsWith("mt")
-        val onePlusKpmSupported = !onePlusIsMtk && ksuVariant in setOf(KSU_VARIANT_SUKISU, KSU_VARIANT_RESUKISU)
+        val onePlusKpmSupported = !onePlusIsMtk && ksuVariant in setOf(KSU_VARIANT_SUKISU, KSU_VARIANT_BAKASU)
         val gkiKpmSupported = isKpmSupported(BUILD_TARGET_GKI, ksuVariant, normalizedKsuBranch)
         val onePlusProxyAllowed = !onePlusIsMtk
         val onePlusSusfsEnabled = onePlusSusfsSupported(line.androidVersion, line.kernelVersion)
@@ -416,8 +419,8 @@ object KernelSupport {
         ) {
             return "源码 ref 格式无效"
         }
-        if (!Regex("^\\d{4}-(0[1-9]|1[0-2])$").matches(config.osPatchLevel.trim())) {
-            return "补丁月份必须使用 YYYY-MM"
+        if (!Regex("^(?:\\d{4}-(0[1-9]|1[0-2])|lts)$", RegexOption.IGNORE_CASE).matches(config.osPatchLevel.trim())) {
+            return tr(R.string.build_source_patch_month_invalid)
         }
         val configs = config.sourceDefconfigs.map(String::trim).filter(String::isNotBlank)
         if (configs.isEmpty() || "gki_defconfig" !in configs) {
@@ -485,21 +488,39 @@ object KernelSupport {
     fun normalizeKsuVariant(value: String?): String = normalizeKsuVariant(value, BUILD_TARGET_GKI)
 
     fun normalizeKsuVariant(value: String?, buildTarget: String?): String {
-        val normalized = when (value.orEmpty().trim().lowercase()) {
-            KSU_VARIANT_OFFICIAL.lowercase() -> KSU_VARIANT_OFFICIAL
-            KSU_VARIANT_SUKISU.lowercase() -> KSU_VARIANT_SUKISU
-            KSU_VARIANT_RESUKISU.lowercase() -> KSU_VARIANT_RESUKISU
-            KSU_VARIANT_NONE.lowercase(), "无" -> KSU_VARIANT_NONE
-            else -> KSU_VARIANT_RESUKISU
+        val lower = value.orEmpty().trim().lowercase()
+        // Upstream renamed ReSukiSU/ReSukiSU to Baka-SU/BakaSU; older app builds and
+        // already-saved build records still carry the retired spelling.
+        val isLegacyAlias = lower.isNotBlank() &&
+            KSU_VARIANT_LEGACY_ALIASES.any { it in lower }
+        val normalized = when {
+            lower == KSU_VARIANT_OFFICIAL.lowercase() -> KSU_VARIANT_OFFICIAL
+            lower == KSU_VARIANT_SUKISU.lowercase() -> KSU_VARIANT_SUKISU
+            lower == KSU_VARIANT_BAKASU.lowercase() -> KSU_VARIANT_BAKASU
+            lower == KSU_VARIANT_NONE.lowercase() || lower == "无" -> KSU_VARIANT_NONE
+            isLegacyAlias -> KSU_VARIANT_BAKASU
+            else -> KSU_VARIANT_BAKASU
         }
         return if (normalizeBuildTarget(buildTarget) == BUILD_TARGET_ONEPLUS) {
             normalized.takeIf { it in ONEPLUS_KSU_VARIANT_OPTIONS } ?: KSU_VARIANT_SUKISU
         } else {
-            normalized.takeIf { it in KSU_VARIANT_OPTIONS } ?: KSU_VARIANT_RESUKISU
+            normalized.takeIf { it in KSU_VARIANT_OPTIONS } ?: KSU_VARIANT_BAKASU
         }
     }
 
     fun ksuBranchOptions(): List<String> = KSU_BRANCH_STANDARD_OPTIONS
+
+    /**
+     * True when [value] is the retired `ReSukiSU` spelling rather than a current variant.
+     * Only reachable from restored build records or plans shared by older app builds, so
+     * [normalizeKsuVariant] has already folded these into [KSU_VARIANT_BAKASU].
+     */
+    fun isDeprecatedKsuVariantAlias(value: String?): Boolean {
+        val lower = value.orEmpty().trim().lowercase()
+        return lower.isNotBlank() &&
+            lower !in KSU_VARIANT_OPTIONS.map { it.lowercase() } &&
+            KSU_VARIANT_LEGACY_ALIASES.any { it in lower }
+    }
 
     fun normalizeKsuBranch(value: String): String =
         value.takeIf { it in KSU_BRANCH_STANDARD_OPTIONS } ?: KSU_BRANCH_STABLE
@@ -512,8 +533,8 @@ object KernelSupport {
             normalizedVariant == KSU_VARIANT_NONE -> false
             normalizedVariant == KSU_VARIANT_OFFICIAL -> false
             normalizedTarget == BUILD_TARGET_ONEPLUS ->
-                normalizedVariant in setOf(KSU_VARIANT_SUKISU, KSU_VARIANT_RESUKISU)
-            normalizedVariant == KSU_VARIANT_RESUKISU &&
+                normalizedVariant in setOf(KSU_VARIANT_SUKISU, KSU_VARIANT_BAKASU)
+            normalizedVariant == KSU_VARIANT_BAKASU &&
                 normalizedBranch !in setOf(KSU_BRANCH_STABLE, KSU_BRANCH_CUSTOM) -> false
             else -> true
         }

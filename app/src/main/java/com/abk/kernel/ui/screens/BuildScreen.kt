@@ -75,7 +75,7 @@ import com.abk.kernel.data.model.KSU_BRANCH_CUSTOM
 import com.abk.kernel.data.model.KSU_BRANCH_LATEST
 import com.abk.kernel.data.model.KSU_BRANCH_STABLE
 import com.abk.kernel.data.model.KSU_VARIANT_NONE
-import com.abk.kernel.data.model.KSU_VARIANT_RESUKISU
+import com.abk.kernel.data.model.KSU_VARIANT_BAKASU
 import com.abk.kernel.data.model.KSU_VARIANT_SUKISU
 import com.abk.kernel.data.model.ModuleCatalogItem
 import com.abk.kernel.data.model.ModuleCatalogItemKind
@@ -1381,7 +1381,7 @@ fun BuildScreen(
                     } else {
                         config.copy(
                             buildTarget = BUILD_TARGET_GKI,
-                            kernelsuVariant = KSU_VARIANT_RESUKISU
+                            kernelsuVariant = KSU_VARIANT_BAKASU
                         )
                     }
                     vm.updateBuildConfig(KernelSupport.normalize(next))
@@ -1519,7 +1519,7 @@ fun BuildScreen(
                         value = config.osPatchLevel,
                         onValueChange = { vm.updateBuildConfig(config.copy(osPatchLevel = it)) },
                         label = { Text(stringResource(R.string.build_source_patch_month)) },
-                        placeholder = { Text("2025-09") },
+                        placeholder = { Text(stringResource(R.string.build_source_patch_month_placeholder)) },
                         modifier = Modifier.fillMaxWidth(),
                         singleLine = true
                     )
@@ -1676,6 +1676,7 @@ fun BuildScreen(
 
             SectionCard(section = BuildSection.KernelSu) {
                 val noRootScheme = config.kernelsuVariant == KSU_VARIANT_NONE
+                val deprecatedVariantAlias = KernelSupport.isDeprecatedKsuVariantAlias(rawConfig.kernelsuVariant)
                 DropdownField(
                     label = stringResource(R.string.build_kernelsu_variant),
                     value = config.kernelsuVariant,
@@ -1684,6 +1685,13 @@ fun BuildScreen(
                         vm.updateBuildConfig(KernelSupport.normalize(config.copy(kernelsuVariant = it)))
                     }
                 )
+                if (deprecatedVariantAlias) {
+                    Text(
+                        text = stringResource(R.string.build_ksu_variant_deprecated),
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.error
+                    )
+                }
                 if (noRootScheme) {
                     Text(
                         text = if (isOnePlusBuild) {

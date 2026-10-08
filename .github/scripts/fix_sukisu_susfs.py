@@ -156,17 +156,17 @@ int ksu_handle_execveat_sucompat(int *fd, struct filename **filename_ptr,
     (void)flags;
 
     if (unlikely(!filename_ptr || !*filename_ptr || IS_ERR(*filename_ptr)))
-        return 0;
+        return 1;
 
     filename = *filename_ptr;
     if (unlikely(!filename->name))
-        return 0;
+        return 1;
 
     if (!ksu_is_allow_uid_for_current(current_uid().val))
-        return 0;
+        return 1;
 
     if (likely(memcmp(filename->name, SU_PATH, sizeof(SU_PATH))))
-        return 0;
+        return 1;
 
     pr_info("ksu_handle_execveat_sucompat: su found\n");
     memcpy((void *)filename->name, KSUD_PATH, sizeof(KSUD_PATH));
@@ -175,7 +175,7 @@ int ksu_handle_execveat_sucompat(int *fd, struct filename **filename_ptr,
     if (ret)
         pr_err("escape_with_root_profile() failed: %d\n", ret);
 
-    return 0;
+    return ret;
 }
 
 int ksu_handle_execveat(int *fd, struct filename **filename_ptr, void *argv,
@@ -252,17 +252,17 @@ int ksu_handle_execveat_sucompat(int *fd, struct filename **filename_ptr,
     (void)__never_use_flags;
 
     if (unlikely(!filename_ptr))
-        return 0;
+        return 1;
 
     filename = *filename_ptr;
     if (IS_ERR(filename) || !filename || !filename->name)
-        return 0;
+        return 1;
 
     if (!ksu_is_allow_uid_for_current(current_uid().val))
-        return 0;
+        return 1;
 
     if (likely(memcmp(filename->name, su_path, sizeof(su_path))))
-        return 0;
+        return 1;
 
     pr_info("ksu_handle_execveat_sucompat: su found\n");
     memcpy((void *)filename->name, KSUD_PATH, sizeof(KSUD_PATH));
@@ -274,7 +274,7 @@ int ksu_handle_execveat_sucompat(int *fd, struct filename **filename_ptr,
         pr_err("escape_with_root_profile() failed: %d\n", ret);
 
     ksu_sulog_emit_pending(pending_sucompat, ret, GFP_KERNEL);
-    return 0;
+    return ret;
 }
 
 int ksu_handle_execveat(int *fd, struct filename **filename_ptr, void *argv,
@@ -366,6 +366,21 @@ int ksu_handle_stat(int *dfd, const char __user **filename_user, int *flags)
         text = "\n".join(kept)
 
         text = text.replace(marker, compat_block + marker, 1)
+
+    # fs/exec.c uses !hook_result to select post-exec su-session handling.
+    # Older ABK wrappers returned zero for ordinary/denied execs as well,
+    # causing anonymous driver FDs to be injected into services like zygote.
+    pattern = re.compile(
+        r"(int ksu_handle_execveat_sucompat\(int \*fd, struct filename \*\*filename_ptr,.*?\n\{)"
+        r"(?P<body>.*?)(\n\})",
+        re.S,
+    )
+    match = pattern.search(text)
+    if match and "(void)fd;" in match["body"] and "ret = escape_with_root_profile();" in match["body"]:
+        body = match["body"]
+        body = re.sub(r"\n    return 0;\s*$", "\n    return ret;", body)
+        body = body.replace("return 0;", "return 1;")
+        text = text[:match.start("body")] + body + text[match.end("body"):]
 
     write_if_changed(path, text, original, changed_files)
 
